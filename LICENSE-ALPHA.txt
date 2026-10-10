@@ -1,0 +1,38 @@
+DIRECT ORDER 27 ALPHA TEST LICENCE
+
+Copyright (c) 2026 PiercingXX. All rights reserved.
+
+This licence covers the Direct Order 27 alpha test build ("the Build"): the
+game files in this repository's releases, and the scripts in this repository.
+By installing or running the Build you agree to these terms. If you don't
+agree, don't install it.
+
+1. Test build. The Build is an unfinished test version, given to you only to
+   play and to report problems during the alpha test. It may crash, lose your
+   settings, or change at any time. You use it at your own risk.
+
+2. No redistribution. Don't share, upload, mirror, sell or give the Build, or
+   any file from it, to anyone. Each tester gets the Build from this
+   repository only.
+
+3. No reverse engineering. Don't decompile, disassemble, unpack, extract,
+   modify or reverse engineer the Build or its data files, and don't make
+   tools that do, except where the law allows it regardless of this licence.
+
+4. Logs. The Build sends its session logs, crash reports, performance numbers,
+   your alpha username, your IP address and your system details (Linux
+   distribution and kernel or Windows version and build, processor, graphics
+   card and driver, memory; on Windows, a small memory dump of the game's
+   threads when it freezes or crashes) to the developer,
+   automatically, during play, when you quit and after a crash. Installing or
+   running the Build is your agreement to this.
+
+5. Confidential. Until the developer makes them public, keep what you see in
+   the Build to the alpha: no streams, videos or screenshots outside the alpha
+   channels unless the developer says you may.
+
+6. No warranty. The Build is provided "as is", without any warranty. The
+   developer is not liable for any damage or loss from using it.
+
+7. End. This licence ends when the alpha test ends or when the developer says
+   so. When it ends, uninstall the Build (do27-uninstall).

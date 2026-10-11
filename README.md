@@ -111,4 +111,4 @@ On Windows: **Settings > Apps > Installed apps > Direct Order 27 (alpha) > Unins
 
 This removes the game, the commands, the app-menu or Start menu entries, your settings, logs and caches. Your alpha username stays reserved until the alpha ends. On Linux the system packages stay: they're standard Arch or Ubuntu packages that other programs use too.
 
-This is a test build under the alpha licence in `LICENSE-ALPHA.txt`. Please don't share it outside the alpha.
+This is a test build under the alpha license in `LICENSE-ALPHA.txt`. Please don't share it outside the alpha.

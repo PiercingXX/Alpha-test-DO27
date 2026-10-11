@@ -1,8 +1,8 @@
-DIRECT ORDER 27 ALPHA TEST LICENCE
+DIRECT ORDER 27 ALPHA TEST LICENSE
 
 Copyright (c) 2026 PiercingXX. All rights reserved.
 
-This licence covers the Direct Order 27 alpha test build ("the Build"): the
+This license covers the Direct Order 27 alpha test build ("the Build"): the
 game files in this repository's releases, and the scripts in this repository.
 By installing or running the Build you agree to these terms. If you don't
 agree, don't install it.
@@ -17,7 +17,7 @@ agree, don't install it.
 
 3. No reverse engineering. Don't decompile, disassemble, unpack, extract,
    modify or reverse engineer the Build or its data files, and don't make
-   tools that do, except where the law allows it regardless of this licence.
+   tools that do, except where the law allows it regardless of this license.
 
 4. Logs. The Build sends its session logs, crash reports, performance numbers,
    your alpha username, your IP address and your system details (Linux
@@ -34,5 +34,5 @@ agree, don't install it.
 6. No warranty. The Build is provided "as is", without any warranty. The
    developer is not liable for any damage or loss from using it.
 
-7. End. This licence ends when the alpha test ends or when the developer says
+7. End. This license ends when the alpha test ends or when the developer says
    so. When it ends, uninstall the Build (do27-uninstall).

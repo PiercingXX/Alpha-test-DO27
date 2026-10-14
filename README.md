@@ -1,6 +1,6 @@
 # Direct Order 27: alpha test
 
-Thanks for testing! This repository holds the packaged alpha build only. It runs on Linux (Arch, CachyOS, or Ubuntu 22.04 or 24.04) and on Windows 10 or 11.
+Thanks for testing! This repository holds the packaged alpha build only. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 
 ## Linux: install in 3 steps
 
@@ -10,7 +10,7 @@ Thanks for testing! This repository holds the packaged alpha build only. It runs
    curl -fsSL https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash
    ```
 
-   On Ubuntu, paste this line instead (Ubuntu comes without `curl`):
+   On Ubuntu or Debian, paste this line instead (they come without `curl`):
 
    ```
    wget -qO- https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash
@@ -48,8 +48,10 @@ The alpha isn't signed with a certificate yet, so Windows may not know it:
 
 On Linux:
 
-- Arch Linux or CachyOS (64-bit), updated in the last year (`sudo pacman -Syu`), or Ubuntu 22.04 or 24.04 (64-bit)
+- Arch Linux or CachyOS (64-bit), updated in the last year (`sudo pacman -Syu`), or Ubuntu 22.04 or 24.04 (64-bit), or Debian 12 or 13 (64-bit)
 - On Ubuntu with an NVIDIA card: the NVIDIA driver, installed before the game. Open **Software & Updates > Additional Drivers**, pick the recommended NVIDIA driver, restart, then run the install line. The installer never installs an NVIDIA driver itself. AMD and Intel cards need nothing extra.
+- On Debian with an NVIDIA card: enable the `contrib` and `non-free` sources, run `sudo apt install nvidia-driver firmware-misc-nonfree` ([Debian guide](https://wiki.debian.org/NvidiaGraphicsDrivers)), restart, then run the install line.
+- On Debian, your account needs `sudo` (if you set a root password during setup, it doesn't have it). The installer tells you the one `su -c` line to run instead if it can't use `sudo`.
 - A graphics card with Vulkan: an NVIDIA RTX 2080 or newer, or an AMD RX 6000 or newer
 - An NVMe SSD with 55 GB free (the game takes about 52 GB once installed)
 - 16 GB of RAM
@@ -75,7 +77,7 @@ On Linux:
 - Your settings and keys: `~/.config/DO27/`
 - Your username, logs and crash reports: `~/.local/share/do27/`
 - Graphics caches: `~/.cache/do27/`
-- System packages, only if they're missing. Arch and CachyOS: `vulkan-icd-loader`, `vulkan-tools`, your graphics driver (`nvidia-utils`, `vulkan-radeon` or `vulkan-intel`), `curl`, `tar`, `zstd`. Ubuntu: `libvulkan1`, `mesa-vulkan-drivers`, `vulkan-tools`, `curl`, `tar`, `zstd` and a few standard libraries a desktop already has (sound, X11/Wayland, EGL)
+- System packages, only if they're missing. Arch and CachyOS: `vulkan-icd-loader`, `vulkan-tools`, your graphics driver (`nvidia-utils`, `vulkan-radeon` or `vulkan-intel`), `curl`, `tar`, `zstd`. Ubuntu and Debian: `libvulkan1`, `mesa-vulkan-drivers`, `vulkan-tools`, `curl`, `tar`, `zstd` and a few standard libraries a desktop already has (sound, X11/Wayland, EGL)
 
 On Windows:
 
@@ -85,6 +87,12 @@ On Windows:
 - Your username, logs and crash reports: `%LOCALAPPDATA%\DO27\`
 - Graphics caches: `%LOCALAPPDATA%\DO27\cache\`
 - Nothing else: no system files, no drivers, no administrator changes
+
+## Playing together
+
+There is no relay in the alpha: players connect straight to the host. In the game, the host opens **HOST** and **LISTEN**; the lobby shows `LAN IP:7790` for players on the same network. For friends over the internet, the host forwards **UDP 7790** on their router and gives them their public IP with `:7790`. A joiner picks **JOIN HOST BY ADDRESS**, types `IP:7790`, **NEXT**, then **JOIN MATCH**. The full steps are in the testers guide.
+
+The first screen asks for your username and says it plainly: this alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree.
 
 ## Reporting problems
 
@@ -109,6 +117,6 @@ do27-uninstall
 
 On Windows: **Settings > Apps > Installed apps > Direct Order 27 (alpha) > Uninstall**, or **Uninstall Direct Order 27 (alpha)** in the Start menu, or type `do27-uninstall` in PowerShell.
 
-This removes the game, the commands, the app-menu or Start menu entries, your settings, logs and caches. Your alpha username stays reserved until the alpha ends. On Linux the system packages stay: they're standard Arch or Ubuntu packages that other programs use too.
+This removes the game, the commands, the app-menu or Start menu entries, your settings, logs and caches. Your alpha username stays reserved until the alpha ends. On Linux the system packages stay: they're standard Arch, Ubuntu or Debian packages that other programs use too.
 
 This is a test build under the alpha license in `LICENSE-ALPHA.txt`. Please don't share it outside the alpha.

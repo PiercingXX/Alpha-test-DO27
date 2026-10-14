@@ -126,7 +126,11 @@ try {
       if (-not $p.WaitForExit(90000)) { try { $p.Kill() } catch {} }
       if (Test-Path $dxFile) {
         $dx = Get-Content $dxFile
-        $dx12 = [bool]($dx | Where-Object { $_ -match 'DDI Version:\s*12' })
+        # Only a complete English report with DDI lines can say "no DirectX 12": a report cut
+        # short by the 90 s limit, or in another language, has no "DDI Version" line, and
+        # then the card name decides below.
+        $ddi = @($dx | ForEach-Object { if ($_ -match 'DDI Version:\s*(\d+)') { [int]$Matches[1] } })
+        if ($ddi.Count -gt 0) { $dx12 = (($ddi | Measure-Object -Maximum).Maximum -ge 12) }
         Remove-Item $dxFile -Force -ErrorAction SilentlyContinue
       }
     } catch {}
@@ -141,7 +145,8 @@ try {
     }
   } else {
     Say "Graphics: $($real[0])"
-    if ($dx12 -eq $false) {
+    # Every RTX, RX 6000+ and Arc card has DirectX 12: dxdiag can't overrule the card name.
+    if ($dx12 -eq $false -and $real[0] -notmatch 'RTX|RX [6-9][0-9]{3}|Arc') {
       Fail 'Your graphics card or driver has no DirectX 12. Update your graphics driver, restart your PC, then run this command again.'
     }
     if ($real[0] -match 'GTX|Quadro [KMP]|RX [45][0-9]{2}([^0-9]|$)|RX 5[0-9]{3}|Vega|Polaris|UHD|Iris|Radeon\(TM\) Graphics') {
@@ -485,7 +490,7 @@ $p = Start-Process dxdiag.exe -ArgumentList '/whql:off', '/t', "`"$f`"" -PassThr
 if ($p.WaitForExit(90000) -and (Test-Path $f)) {
   $ddi = (Get-Content $f | Where-Object { $_ -match 'DDI Version:' } | ForEach-Object { ($_ -split ':', 2)[1].Trim() }) -join ', '
   Line "directx ddi $ddi"
-  if ($ddi -notmatch '12') { Line 'MISSING DirectX 12: update your graphics driver'; $n++ }
+  if ($ddi -and $ddi -notmatch '12') { Line 'MISSING DirectX 12: update your graphics driver'; $n++ }
   Remove-Item $f -Force -ErrorAction SilentlyContinue
 }
 $d = Get-PSDrive -Name $env:LOCALAPPDATA.Substring(0, 1)

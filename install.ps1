@@ -387,6 +387,23 @@ try {
     $prepared = $true
   }
 
+  # The alpha license travels with the build: a release asset, kept next to the TIER file. A
+  # release without it still installs (a warning only). Fetched after an install or update, or when missing.
+  $licFile = Join-Path $Dest 'LICENSE-ALPHA.txt'
+  $licAsset = $assets['LICENSE-ALPHA.txt']
+  if ($licAsset -and ($prepared -or -not (Test-Path $licFile))) {
+    $licTmp = "$licFile.part"
+    & curl.exe -fsSL --retry 3 -o $licTmp $licAsset.browser_download_url
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $licTmp) -and (Get-Item $licTmp).Length -gt 0) {
+      Move-Item -Force $licTmp $licFile
+    } else {
+      Remove-Item $licTmp -Force -ErrorAction SilentlyContinue
+      Warn "Couldn't download LICENSE-ALPHA.txt. The game still installs; the license is on the release page."
+    }
+  } elseif (-not $licAsset -and $prepared) {
+    Warn 'This release has no LICENSE-ALPHA.txt. The game still installs.'
+  }
+
   # 5. First-launch preparation (--prepare): verify the shipped cook cache covers
   # both alpha maps and cook any miss, headless, so the first match never waits
   # on texture cooking. Runs after a fresh install and after every update (the
@@ -394,9 +411,55 @@ try {
   # here never blocks the game.
   if ($prepared -and -not $env:DO27_SKIP_PREPARE) {
     Say 'Preparing the game for this PC (one-time, after install/update)...'
+    Say '  This builds the game data and graphics shaders for your PC and can take a few minutes. Progress shows below.'
     $prepLog = Join-Path $Dest 'prepare.log'
     $prepLine = '/d /s /c ""' + (Join-Path $Game $Exe) + '" --prepare > "' + $prepLog + '" 2>&1"'
-    $prc = (Start-Process cmd.exe -ArgumentList $prepLine -WorkingDirectory $Game -NoNewWindow -Wait -PassThru).ExitCode
+    $prepProc = Start-Process cmd.exe -ArgumentList $prepLine -WorkingDirectory $Game -NoNewWindow -PassThru
+    $null = $prepProc.Handle   # keeps the exit code readable after the process ends
+    $prepStart = Get-Date
+    $prepShown = -1
+    $prepBeat = $prepStart
+    $prepTotal = 0
+    while (-not $prepProc.HasExited) {
+      Start-Sleep -Milliseconds 700
+      $prepText = ''
+      try {
+        $fs = New-Object System.IO.FileStream($prepLog, 'Open', 'Read', 'ReadWrite')
+        $sr = New-Object System.IO.StreamReader($fs)
+        $prepText = $sr.ReadToEnd()
+        $sr.Close()
+      } catch {}
+      $prepDone = -1
+      foreach ($pl in ($prepText -split "`r?`n")) {
+        if ($pl.StartsWith('{"event":"progress"')) {
+          try { $pj = $pl | ConvertFrom-Json; $prepDone = [int]$pj.done; $prepTotal = [int]$pj.total } catch {}
+        }
+      }
+      $prepSecs = [int]((Get-Date) - $prepStart).TotalSeconds
+      if ($prepDone -gt $prepShown -and $prepTotal -gt 0) {
+        $prepShown = $prepDone
+        $prepBeat = Get-Date
+        if ($prepDone -ge 1 -and $prepDone -lt $prepTotal) {
+          # The steps differ in length, so this is a rough, rounded-up estimate.
+          $prepLeft = [int]([math]::Ceiling($prepSecs / $prepDone * ($prepTotal - $prepDone) / 5) * 5)
+          Write-Host ('    step {0} of {1} done, {2} s so far, about {3} s left' -f $prepDone, $prepTotal, $prepSecs, $prepLeft)
+        } else {
+          Write-Host ('    step {0} of {1} done, {2} s so far' -f $prepDone, $prepTotal, $prepSecs)
+        }
+      } elseif (((Get-Date) - $prepBeat).TotalSeconds -ge 20) {
+        # Never a silent wait: a heartbeat when no step finished for 20 s.
+        $prepBeat = Get-Date
+        $prepOf = if ($prepTotal -gt 0) { $prepTotal } else { 4 }
+        Write-Host ('    still working: {0} s so far, step {1} of {2} is running' -f $prepSecs, ([math]::Max($prepShown, 0) + 1), $prepOf)
+      }
+    }
+    $prepProc.WaitForExit()
+    $prc = $prepProc.ExitCode
+    Write-Host ('    prepared in {0} s.' -f [int]((Get-Date) - $prepStart).TotalSeconds)
+    if (Test-Path $prepLog) {
+      Get-Content $prepLog | Select-String -Pattern 'PIPELINE_WARM total' | ForEach-Object { Write-Host ('    ' + $_.Line) }
+    }
+    Say 'If the first start still builds shaders, the menu shows a count while it does (once per graphics driver).'
     if ($prc -ne 0) { Warn 'prepare finished with a warning (the first launch still works).' }
     if (Test-Path $prepLog) {
       Get-Content $prepLog | Select-String -Pattern 'RUNTIME_COOK|map_resident' | ForEach-Object { Write-Host ('    ' + $_.Line) }
@@ -593,6 +656,7 @@ if ($env:DO27_UNINSTALL_PAUSE) { Start-Sleep 6 }
   Write-Host ''
   Write-Host 'Done: ' -ForegroundColor Green -NoNewline
   Write-Host 'open "Direct Order 27 (alpha)" from the Start menu or your desktop, or type do27 in a new terminal.'
+  if (Test-Path $licFile) { Write-Host "This build is a private alpha under LICENSE-ALPHA.txt in $Dest" }
   Write-Host 'The first time it starts, the game asks you to choose your alpha username.'
   Write-Host "This alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree."
   Write-Host 'It updates itself each time you start it. To remove it: Settings > Apps > Installed apps, or type do27-uninstall.'

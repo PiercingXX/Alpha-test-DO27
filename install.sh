@@ -357,6 +357,20 @@ fi
 # now use printf "%.0f").
 [ -x "$GAME/run.sh" ] || die "The game isn't installed (the step above failed). Run the install command again; if it fails the same way, post this in the alpha channel."
 
+# The alpha license travels with the build: a release asset, kept next to the game. A release
+# without it still installs (a warning only). Fetched after an install or update, or when missing.
+lic_url=$(asset_url 'LICENSE-ALPHA\.txt')
+if [ -n "$lic_url" ] && { [ "$prepared" = 1 ] || [ ! -f "$DEST/LICENSE-ALPHA.txt" ]; }; then
+  lic_tmp=$(mktemp "$DEST/.license.XXXXXX")
+  if curl -fsSL -o "$lic_tmp" "$lic_url" && [ -s "$lic_tmp" ]; then
+    chmod 644 "$lic_tmp"; mv -f "$lic_tmp" "$DEST/LICENSE-ALPHA.txt"
+  else
+    rm -f "$lic_tmp"; warn "Couldn't download LICENSE-ALPHA.txt. The game still installs; the license is on the release page."
+  fi
+elif [ -z "$lic_url" ] && [ "$prepared" = 1 ]; then
+  warn "This release has no LICENSE-ALPHA.txt. The game still installs."
+fi
+
 # 5. First-launch preparation (--prepare): verify the shipped cook cache covers
 # both alpha maps and cook any miss, headless, so the first match never waits on
 # texture cooking. Runs after a fresh install and after every update (the GPU
@@ -366,9 +380,35 @@ fi
 if [ "$prepared" = 1 ] && [ -z "${DO27_SKIP_PREPARE:-}" ]; then
   say "Preparing the game for this PC (one-time, after install/update)..."
   prep_log="$DEST/prepare.log"
-  (cd "$GAME" && ./do27_launcher --prepare) >"$prep_log" 2>&1 \
-    || warn "prepare finished with a warning (the first launch still works)."
-  grep -E 'RUNTIME_COOK|RUNTIME_BAKE|DATA_TIER|map_resident' "$prep_log" | sed 's/^/    /' || true
+  : >"$prep_log"
+  (cd "$GAME" && exec ./do27_launcher --prepare) >"$prep_log" 2>&1 &
+  prep_pid=$!
+  prep_start=$SECONDS; prep_shown=-1; prep_beat=$SECONDS; prep_total=0
+  while kill -0 "$prep_pid" 2>/dev/null; do
+    sleep 1
+    prog=$(grep -F '{"event":"progress"' "$prep_log" 2>/dev/null | tail -1 || true)
+    prep_done=$(printf '%s' "$prog" | sed -nE 's/.*"done":([0-9]+).*/\1/p')
+    t=$(printf '%s' "$prog" | sed -nE 's/.*"total":([0-9]+).*/\1/p')
+    [ -n "$t" ] && prep_total=$t
+    secs=$((SECONDS - prep_start))
+    if [ -n "$prep_done" ] && [ "$prep_done" -gt "$prep_shown" ] && [ "$prep_total" -gt 0 ]; then
+      prep_shown=$prep_done; prep_beat=$SECONDS
+      if [ "$prep_done" -ge 1 ] && [ "$prep_done" -lt "$prep_total" ]; then
+        # The steps differ in length: a rough estimate, rounded up to 5 s.
+        left=$(( ((secs * (prep_total - prep_done) / prep_done) + 4) / 5 * 5 ))
+        echo "    step $prep_done of $prep_total done, $secs s so far, about $left s left"
+      else
+        echo "    step $prep_done of $prep_total done, $secs s so far"
+      fi
+    elif [ $((SECONDS - prep_beat)) -ge 20 ]; then
+      # Never a silent wait: a heartbeat when no step finished for 20 s.
+      prep_beat=$SECONDS
+      echo "    still working: $secs s so far, step $(( ${prep_shown/#-1/0} + 1 )) of ${prep_total/#0/6} is running"
+    fi
+  done
+  wait "$prep_pid" || warn "prepare finished with a warning (the first launch still works)."
+  echo "    prepared in $((SECONDS - prep_start)) s."
+  grep -E 'RUNTIME_COOK|RUNTIME_BAKE|DATA_TIER|map_resident|PIPELINE_WARM total' "$prep_log" | sed 's/^/    /' || true
   say "Ready."
 fi
 
@@ -437,6 +477,7 @@ case ":$PATH:" in
   *":$BIN:"*) ;;
   *) printf 'To use the do27 command, open a new terminal first. If it still is not found, run %sfish_add_path ~/.local/bin%s (fish) or add ~/.local/bin to your PATH (bash).\n' "$B" "$N" ;;
 esac
+[ ! -f "$DEST/LICENSE-ALPHA.txt" ] || printf 'This build is a private alpha under LICENSE-ALPHA.txt in %s\n' "$DEST"
 printf 'The first time it starts, the game asks you to choose your alpha username.\n'
 printf '%s\n' "This alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree."
 printf 'It updates itself each time you start it. To remove it: do27-uninstall\n\n'

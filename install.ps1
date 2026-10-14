@@ -43,6 +43,58 @@ function TagVersion($t) {
   if ("$t" -match '^v?(\d+)\.(\d+)\.(\d+)') { return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3]) }
   return $null
 }
+# Every graphics card DXGI lists (the adapters the game itself sees), with its own (dedicated)
+# video memory: @{ Name; Bytes; Vendor }. Software adapters are left out. A card built into the
+# CPU reports only a small carve-out, so it lands in the LOW package. $null if DXGI can't be asked.
+function DxgiCards {
+  try {
+    if (-not ('Do27Dxgi' -as [type])) {
+      Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class Do27Dxgi {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct Desc1 {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
+    public uint VendorId, DeviceId, SubSysId, Revision;
+    public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
+    public long AdapterLuid;
+    public uint Flags;
+  }
+  [ComImport, Guid("770aae78-f26f-4dba-a829-253c83d1b387"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IFactory1 {
+    void O0(); void O1(); void O2(); void O3();          // IDXGIObject
+    void F0(); void F1(); void F2(); void F3(); void F4(); // IDXGIFactory
+    [PreserveSig] int EnumAdapters1(uint index, out IAdapter1 adapter);
+  }
+  [ComImport, Guid("29038f61-3839-4626-91fd-086879011a05"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAdapter1 {
+    void O0(); void O1(); void O2(); void O3();          // IDXGIObject
+    void A0(); void A1(); void A2();                     // IDXGIAdapter
+    [PreserveSig] int GetDesc1(out Desc1 desc);
+  }
+  [DllImport("dxgi.dll")] static extern int CreateDXGIFactory1(ref Guid riid, out IFactory1 factory);
+  public static string[] List() {
+    var iid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
+    IFactory1 f;
+    if (CreateDXGIFactory1(ref iid, out f) != 0) return new string[0];
+    var list = new List<string>();
+    for (uint i = 0; i < 16; i++) {
+      IAdapter1 a;
+      if (f.EnumAdapters1(i, out a) != 0) break;
+      Desc1 d;
+      if (a.GetDesc1(out d) == 0 && (d.Flags & 2) == 0 && d.VendorId != 0x1414)
+        list.Add(d.DedicatedVideoMemory.ToUInt64() + "|" + d.VendorId + "|" + d.Description);
+    }
+    return list.ToArray();
+  }
+}
+'@
+    }
+    return @([Do27Dxgi]::List() | ForEach-Object { $p = $_ -split '\|', 3; @{ Bytes = [double]$p[0]; Vendor = [int]$p[1]; Name = $p[2] } })
+  } catch { return $null }
+}
 
 try {
   Write-Host ''
@@ -98,6 +150,30 @@ try {
   }
   $memGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
   if ($memGB -lt 15) { Warn "This PC has $memGB GB of memory; the alpha wants 16 GB. Close other programs before playing." }
+
+  # Which data package fits this PC. Every build comes in three packages with the same game and
+  # different texture detail; video memory picks one, never the card's maker or model:
+  #   LOW   8 GB of video memory or less, or graphics built into the CPU (they share system memory)
+  #   HIGH  10 to 16 GB
+  #   ULTRA 20 GB or more
+  # The game's own quality setting (how fast it runs) is separate and stays automatic; the package
+  # only decides which textures are on disk. $env:DO27_TIER = low|high|ultra overrides the choice,
+  # and an update keeps the package you installed.
+  $gpuPick = $null
+  $dxgi = DxgiCards
+  if ($dxgi) { $gpuPick = $dxgi | Sort-Object { $_.Bytes } -Descending | Select-Object -First 1 }
+  if (-not $gpuPick) {
+    # No DXGI answer: the display drivers' own memory size (a 64-bit value, unlike Win32_VideoController's).
+    $gpuPick = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue |
+      ForEach-Object { $k = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+        if ($k -and $k.'HardwareInformation.qwMemorySize') { @{ Bytes = [double]$k.'HardwareInformation.qwMemorySize'; Name = $k.DriverDesc } } } |
+      Sort-Object { $_.Bytes } -Descending | Select-Object -First 1
+  }
+  $vramGB = if ($gpuPick) { [math]::Round($gpuPick.Bytes / 1GB) } else { 0 }
+  $autoTier = if ($vramGB -ge 20) { 'ultra' } elseif ($vramGB -ge 10) { 'high' } else { 'low' }
+  # Less than 12 GB of system memory can't hold the bigger packages' textures beside the game.
+  if ($memGB -lt 12) { $autoTier = 'low' }
+  $gpuDesc = if ($gpuPick) { "$($gpuPick.Name), $vramGB GB video memory" } else { "$(if ($real.Count) { $real[0] } else { 'unknown graphics' }), video memory unknown" }
   New-Item -ItemType Directory -Force -Path $Dest, $Bin -ErrorAction Stop | Out-Null
   $driveName = $Dest.Substring(0, 1)
   $freeGB = [math]::Floor((Get-PSDrive -Name $driveName).Free / 1GB)
@@ -127,10 +203,21 @@ try {
     $tag = $rel.tag_name
     foreach ($a in @($rel.assets)) { if ($a.name) { $assets[$a.name] = $a } }
   }
-  $manAsset = $assets['manifest-windows.json']
   $verFile = Join-Path $Dest 'VERSION'
+  $tierFile = Join-Path $Dest 'TIER'
   $instFile = Join-Path $Dest 'manifest-installed.json'
+  $prepared = $false   # $true once a fresh install or update has just been written
   $haveTag = if (Test-Path $verFile) { (Get-Content $verFile -TotalCount 1).Trim() } else { '' }
+  # The package: DO27_TIER, else the one installed (an update keeps it), else this PC's fit.
+  $haveTier = if (Test-Path $tierFile) { (Get-Content $tierFile -TotalCount 1).Trim() } else { '' }
+  if ($env:DO27_TIER) {
+    if ($env:DO27_TIER -notin @('low', 'high', 'ultra')) { Fail "DO27_TIER must be low, high or ultra (it is `"$($env:DO27_TIER)`")." }
+    $tier = $env:DO27_TIER
+  } elseif ($haveTier -and $haveGame) { $tier = $haveTier } else { $tier = $autoTier }
+  $manName = "manifest-windows-$tier"
+  if (-not $assets["$manName.json"]) { $manName = 'manifest-windows'; $tier = '' }   # a release from before the packages
+  $tierUp = $tier.ToUpper()
+  $manAsset = $assets["$manName.json"]
   if (-not $manAsset -or -not $tag) {
     if ($haveGame) {
       Warn "Couldn't check for a new build (offline?). Keeping the one you have."
@@ -139,10 +226,10 @@ try {
       Warn 'No Windows alpha build has been released yet. Your PC is ready; run this same command again on test day.'
       return
     }
-  } elseif ($haveGame -and ($haveTag -eq $tag -or ((TagVersion $haveTag) -and (TagVersion $tag) -and (TagVersion $haveTag) -ge (TagVersion $tag)))) {
-    Say "You already have the latest build ($haveTag)."
+  } elseif ($haveGame -and $haveTier -eq $tier -and ($haveTag -eq $tag -or ((TagVersion $haveTag) -and (TagVersion $tag) -and (TagVersion $haveTag) -ge (TagVersion $tag)))) {
+    Say "You already have the latest build ($haveTag$(if ($tier) { ", $tierUp package" }))."
   } else {
-    if (-not $assets['manifest-windows.json.sha256']) { Fail "The release has no checksum file, so the download can't be verified. Please report this." }
+    if (-not $assets["$manName.json.sha256"]) { Fail "The release has no checksum file, so the download can't be verified. Please report this." }
     if (Get-Process -Name 'do27_launcher' -ErrorAction SilentlyContinue) {
       Fail 'The game is running. Close it, then run this command again.'
     }
@@ -152,7 +239,7 @@ try {
     $manSumFile = Join-Path $dl 'manifest-windows.json.sha256'
     & curl.exe -fsSL --retry 3 -o $manFile $manAsset.browser_download_url
     $rc1 = $LASTEXITCODE
-    & curl.exe -fsSL --retry 3 -o $manSumFile $assets['manifest-windows.json.sha256'].browser_download_url
+    & curl.exe -fsSL --retry 3 -o $manSumFile $assets["$manName.json.sha256"].browser_download_url
     if ($rc1 -ne 0 -or $LASTEXITCODE -ne 0) { Fail "Couldn't download the build's file list. Check your internet connection and run the command again." }
     $wantMan = ((Get-Content $manSumFile -TotalCount 1) -split '\s+')[0].ToLower()
     if ((Get-FileHash -Algorithm SHA256 $manFile).Hash.ToLower() -ne $wantMan) { Fail "The build's file list is damaged (checksum mismatch). Run the command again." }
@@ -168,6 +255,12 @@ try {
       try { $prev = $json.DeserializeObject([IO.File]::ReadAllText($instFile)); foreach ($k in $prev.Keys) { $installed[$k] = $prev[$k] } } catch {}
     }
     $todo = @($chunks | Where-Object { $installed[$_['name']] -ne $_['sha256'] })
+    if ($tier) {
+      $allDl = (($chunks | ForEach-Object { [double]$_['size'] }) | Measure-Object -Sum).Sum
+      $allUn = (($chunks | ForEach-Object { [double]$_['unpacked'] }) | Measure-Object -Sum).Sum
+      Say "Your PC: $gpuDesc -> $tierUp package, $([math]::Ceiling($allDl / 1GB)) GB download ($([math]::Ceiling($allUn / 1GB)) GB installed)."
+      if ($tier -ne $autoTier) { Say "(Chosen with DO27_TIER or kept from your install; this PC fits the $($autoTier.ToUpper()) package.)" }
+    }
     $fetchBytes = [double]((($todo | ForEach-Object { [double]$_['size'] }) | Measure-Object -Sum).Sum)
     # Space: what the chunks unpack to (an update overwrites most of it, so this is generous),
     # the biggest download, and 2 GB to spare.
@@ -178,7 +271,9 @@ try {
         Warn "A new build ($tag) is out, but updating needs about $NeedGB GB free on drive $driveName and you have $freeGB GB. Free some space, then run the install command again. Keeping the build you have."
         $todo = $null
       } else {
-        Fail "Not enough free space on drive ${driveName}: $freeGB GB free, the game needs about $NeedGB GB."
+        $smaller = if ($tier -eq 'ultra') { 'high' } elseif ($tier -eq 'high') { 'low' } else { '' }
+        Fail ("Not enough free space on drive ${driveName}: $freeGB GB free, the game needs about $NeedGB GB." +
+          $(if ($smaller) { " Or install the smaller $($smaller.ToUpper()) package: set `$env:DO27_TIER='$smaller' in PowerShell, then run the install command again." } else { '' }))
       }
     }
   }
@@ -274,10 +369,30 @@ try {
     foreach ($d in @((Join-Path $Dest 'game.old'), (Join-Path $Dest '.new'), $dl)) { if (Test-Path $d) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue } }
     if (-not (Test-Path (Join-Path $Game $Exe))) { Fail 'The build looks incomplete (no game program). Please report this.' }
     Set-Content -Path $verFile -Value $tag -Encoding Ascii -ErrorAction Stop
-    if ($todo.Count -gt 0) { Say "Installed $tag." } else { Say "Installed $tag (nothing new to download)." }
+    if ($tier) { Set-Content -Path $tierFile -Value $tier -Encoding Ascii -ErrorAction Stop } elseif (Test-Path $tierFile) { Remove-Item $tierFile -Force }
+    $pkgNote = if ($tier) { " ($tierUp package)" } else { '' }
+    if ($todo.Count -gt 0) { Say "Installed $tag$pkgNote." } else { Say "Installed $tag$pkgNote (nothing new to download)." }
+    $prepared = $true
   }
 
-  # 4. The do27 launcher, the Start menu and desktop shortcuts, the uninstaller.
+  # 5. First-launch preparation (--prepare): verify the shipped cook cache covers
+  # both alpha maps and cook any miss, headless, so the first match never waits
+  # on texture cooking. Runs after a fresh install and after every update (the
+  # GPU pipeline warm is Ferrite's half; this is the DO27 CPU half). A warning
+  # here never blocks the game.
+  if ($prepared -and -not $env:DO27_SKIP_PREPARE) {
+    Say 'Preparing the game for this PC (one-time, after install/update)...'
+    $prepLog = Join-Path $Dest 'prepare.log'
+    $prepLine = '/d /s /c ""' + (Join-Path $Game $Exe) + '" --prepare > "' + $prepLog + '" 2>&1"'
+    $prc = (Start-Process cmd.exe -ArgumentList $prepLine -WorkingDirectory $Game -NoNewWindow -Wait -PassThru).ExitCode
+    if ($prc -ne 0) { Warn 'prepare finished with a warning (the first launch still works).' }
+    if (Test-Path $prepLog) {
+      Get-Content $prepLog | Select-String -Pattern 'RUNTIME_COOK|map_resident' | ForEach-Object { Write-Host ('    ' + $_.Line) }
+    }
+    Say 'Ready.'
+  }
+
+  # 6. The do27 launcher, the Start menu and desktop shortcuts, the uninstaller.
   # do27.ps1: each start checks for a newer alpha build and installs it first (a few
   # seconds; skipped when offline), then starts the game with its console output saved
   # next to the session logs.
@@ -454,7 +569,7 @@ if ($env:DO27_UNINSTALL_PAUSE) { Start-Sleep 6 }
   foreach ($k in @('NoModify', 'NoRepair')) { New-ItemProperty -Path $ArpKey -Name $k -Value 1 -PropertyType DWord -Force | Out-Null }
   New-ItemProperty -Path $ArpKey -Name 'EstimatedSize' -Value $sizeKB -PropertyType DWord -Force | Out-Null
 
-  # 5. A quick check that the game program starts on this PC.
+  # 7. A quick check that the game program starts on this PC.
   if (-not $Auto -and (Test-Path (Join-Path $Game $Exe))) {
     $out = & (Join-Path $Game $Exe) --help 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0 -and $out -notmatch 'usage') {
@@ -467,6 +582,7 @@ if ($env:DO27_UNINSTALL_PAUSE) { Start-Sleep 6 }
   Write-Host 'Done: ' -ForegroundColor Green -NoNewline
   Write-Host 'open "Direct Order 27 (alpha)" from the Start menu or your desktop, or type do27 in a new terminal.'
   Write-Host 'The first time it starts, the game asks you to choose your alpha username.'
+  Write-Host "This alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree."
   Write-Host 'It updates itself each time you start it. To remove it: Settings > Apps > Installed apps, or type do27-uninstall.'
   Write-Host ''
 } catch {

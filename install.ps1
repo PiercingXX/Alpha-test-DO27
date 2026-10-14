@@ -243,16 +243,23 @@ try {
     if ($rc1 -ne 0 -or $LASTEXITCODE -ne 0) { Fail "Couldn't download the build's file list. Check your internet connection and run the command again." }
     $wantMan = ((Get-Content $manSumFile -TotalCount 1) -split '\s+')[0].ToLower()
     if ((Get-FileHash -Algorithm SHA256 $manFile).Hash.ToLower() -ne $wantMan) { Fail "The build's file list is damaged (checksum mismatch). Run the command again." }
-    # Windows PowerShell's ConvertFrom-Json stops at 2 MB: read it with no size limit.
-    Add-Type -AssemblyName System.Web.Extensions
-    $json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $json.MaxJsonLength = [int]::MaxValue
-    $man = $json.DeserializeObject([IO.File]::ReadAllText($manFile))
+    # Windows PowerShell 5.1's ConvertFrom-Json stops at 2 MB: read it with no size limit.
+    # PowerShell 7 (pwsh) has no System.Web (Add-Type fails with "Could not load type
+    # System.Web.UI.WebResourceAttribute") and no size limit: ConvertFrom-Json -AsHashtable there.
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+      $readJson = { param($p) [IO.File]::ReadAllText($p) | ConvertFrom-Json -AsHashtable }
+    } else {
+      Add-Type -AssemblyName System.Web.Extensions
+      $json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+      $json.MaxJsonLength = [int]::MaxValue
+      $readJson = { param($p) $json.DeserializeObject([IO.File]::ReadAllText($p)) }
+    }
+    $man = & $readJson $manFile
     if ($man['format'] -ne 1 -or $man['platform'] -ne 'windows') { Fail 'This build needs a newer installer. Run the install command from the alpha page again.' }
     $chunks = @($man['chunks'])
     $installed = @{}
     if ($haveGame -and (Test-Path $instFile)) {
-      try { $prev = $json.DeserializeObject([IO.File]::ReadAllText($instFile)); foreach ($k in $prev.Keys) { $installed[$k] = $prev[$k] } } catch {}
+      try { $prev = & $readJson $instFile; foreach ($k in $prev.Keys) { $installed[$k] = $prev[$k] } } catch {}
     }
     $todo = @($chunks | Where-Object { $installed[$_['name']] -ne $_['sha256'] })
     if ($tier) {

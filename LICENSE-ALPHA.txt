@@ -7,32 +7,47 @@ game files in this repository's releases, and the scripts in this repository.
 By installing or running the Build you agree to these terms. If you don't
 agree, don't install it.
 
-1. Test build. The Build is an unfinished test version, given to you only to
-   play and to report problems during the alpha test. It may crash, lose your
-   settings, or change at any time. You use it at your own risk.
+1. Personal test license. You get a personal, revocable, non-transferable
+   permission to install and play the Build on your own computers, only to
+   play and to report problems during the alpha test. Nothing else is granted.
+   The Build is unfinished: it may crash, lose your settings, or change at any
+   time. You use it at your own risk.
 
-2. No redistribution. Don't share, upload, mirror, sell or give the Build, or
-   any file from it, to anyone. Each tester gets the Build from this
-   repository only.
+2. Ownership. The Build and everything in it (code, models, textures,
+   animations, sounds, music, voice, maps, names, story and lore) belong to
+   the developer. Testing it gives you no rights to any of it.
 
-3. No reverse engineering. Don't decompile, disassemble, unpack, extract,
-   modify or reverse engineer the Build or its data files, and don't make
-   tools that do, except where the law allows it regardless of this license.
+3. No redistribution. Don't share, upload, mirror, sell or give the Build, or
+   any file from it, to anyone. Don't share your install link. Each tester
+   gets the Build from this repository only.
 
-4. Logs. The Build sends its session logs, crash reports, performance numbers,
+4. No extraction, no reuse, no AI. Don't decompile, disassemble, unpack,
+   extract, modify or reverse engineer the Build or its data files, and don't
+   make or use tools that do, except where the law allows it regardless of
+   this license. Don't copy any part of the Build (including its models,
+   textures, sounds or code) into another project, and don't give any part of
+   it to an AI model or service, or use it to train, fine-tune or prompt one.
+   Don't get around anything the Build uses to protect itself.
+
+5. Logs. The Build sends its session logs, crash reports, performance numbers,
    your alpha username, your IP address and your system details (Linux
    distribution and kernel or Windows version and build, processor, graphics
    card and driver, memory; on Windows, a small memory dump of the game's
-   threads when it freezes or crashes) to the developer,
-   automatically, during play, when you quit and after a crash. Installing or
-   running the Build is your agreement to this.
+   threads when it freezes or crashes) to the developer, automatically, during
+   play, when you quit and after a crash. Installing or running the Build is
+   your agreement to this.
 
-5. Confidential. Until the developer makes them public, keep what you see in
+6. Confidential. Until the developer makes them public, keep what you see in
    the Build to the alpha: no streams, videos or screenshots outside the alpha
    channels unless the developer says you may.
 
-6. No warranty. The Build is provided "as is", without any warranty. The
+7. Feedback. The developer may use any feedback, ideas or bug reports you
+   give, freely and without paying you.
+
+8. No warranty. The Build is provided "as is", without any warranty. The
    developer is not liable for any damage or loss from using it.
 
-7. End. This license ends when the alpha test ends or when the developer says
-   so. When it ends, uninstall the Build (do27-uninstall).
+9. End. This license ends when the alpha test ends, when the developer says
+   so, or at once if you break any of these terms. When it ends, uninstall
+   the Build (do27-uninstall) and delete every copy you have. Breaking these
+   terms may also lead to legal action under copyright law.

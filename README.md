@@ -33,7 +33,7 @@
     <td width="50%"><img src=".github/media/shot-europa-pilot.jpg" alt="An Area 52 rifleman takes aim on Bore Twelve, Jupiter behind"></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/media/shot-mars-formation.jpg" alt="A Remora and a Manta fly formation through The Switchbacks"></td>
+    <td width="50%"><img src=".github/media/shot-europa-borehole.jpg" alt="The drilling camp over the borehole on Bore Twelve, Jupiter overhead"></td>
     <td width="50%"><img src=".github/media/shot-mars-pilot.jpg" alt="A Remainder rifleman beside a Kraken in The Switchbacks"></td>
   </tr>
 </table>

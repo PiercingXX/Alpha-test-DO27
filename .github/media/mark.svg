@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img" aria-label="Direct Order 27 title mark: two stacked white rank chevrons, underlined, on black">
+  <!-- Direct Order 27 title mark (BRAND-GUIDE.md §8.7). Game marks stroke at 5:
+       heavier than an app mark (4), lighter than the family logomark (6).
+       Two Signal-white rank chevrons at ±45°, stacked, with an underline, on an
+       Ink tile — an order, rhyming with the stacked, underlined XX. -->
+  <rect x="0" y="0" width="108" height="108" rx="22" fill="#000000"/>
+  <!-- Top chevron: apex (54,30), arms reach (38,46) and (70,46). -->
+  <path d="M38,46 L54,30 L70,46" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Bottom chevron: apex (54,52), arms reach (38,68) and (70,68). -->
+  <path d="M38,68 L54,52 L70,68" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Underline: white bar beneath both chevrons. -->
+  <path d="M38,82 L70,82" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+</svg>

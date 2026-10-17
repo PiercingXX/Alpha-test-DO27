@@ -1,4 +1,48 @@
-# Direct Order 27: alpha test (v0.0.6)
+<p align="center">
+  <img src=".github/media/hero.jpg" width="100%" alt="An X-31 Warhull skims the ice of Bore Twelve on Europa, Jupiter on the horizon">
+</p>
+
+<p align="center">
+  <img src=".github/media/mark.svg" width="64" alt="Direct Order 27 mark">
+</p>
+
+<h1 align="center">Direct Order 27</h1>
+
+<p align="center">
+  <b>Hover-tank strategy and first-person combat on Europa and Mars.</b><br>
+  Command the base from your cockpit, or fly wing for someone who does.
+</p>
+
+<p align="center">
+  <a href="https://github.com/PiercingXX/Alpha-test-DO27/releases/latest"><img src="https://img.shields.io/github/v/release/PiercingXX/Alpha-test-DO27?style=flat-square&label=alpha&color=000000&labelColor=1a1a1a" alt="Latest alpha release"></a>
+  <img src="https://img.shields.io/badge/Linux-Arch%20%C2%B7%20CachyOS%20%C2%B7%20Ubuntu%20%C2%B7%20Debian-000000?style=flat-square&labelColor=1a1a1a" alt="Linux: Arch, CachyOS, Ubuntu, Debian">
+  <img src="https://img.shields.io/badge/Windows-10%20%C2%B7%2011-000000?style=flat-square&labelColor=1a1a1a" alt="Windows 10 and 11">
+</p>
+
+<p align="center">
+  <a href="#linux-arch-cachyos-ubuntu-debian-install-in-3-steps">Install on Linux</a> ·
+  <a href="#windows-install-in-3-steps">Install on Windows</a> ·
+  <a href="#controls">Controls</a> ·
+  <a href="#reporting-problems">Report a problem</a> ·
+  <a href="https://github.com/PiercingXX/Alpha-test-DO27/releases/latest">Release notes</a>
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src=".github/media/shot-mars-road.jpg" alt="A Kraken hovers down a canyon road in The Switchbacks on Mars"></td>
+    <td width="50%"><img src=".github/media/shot-europa-pilot.jpg" alt="An Area 52 rifleman takes aim on Bore Twelve, Jupiter behind"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src=".github/media/shot-mars-formation.jpg" alt="A Remora and a Manta fly formation through The Switchbacks"></td>
+    <td width="50%"><img src=".github/media/shot-mars-pilot.jpg" alt="A Remainder rifleman beside a Kraken in The Switchbacks"></td>
+  </tr>
+</table>
+
+<p align="center"><sub>Path-traced stills of the game's own ships, pilots and maps. A PiercingXX game.</sub></p>
+
+---
+
+## Alpha test (v0.0.6)
 
 Thanks for testing! This repository holds the packaged alpha build only. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 

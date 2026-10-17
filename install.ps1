@@ -689,22 +689,26 @@ if ($env:DO27_UNINSTALL_PAUSE) { Start-Sleep 6 }
   }
 
   $icon = Join-Path $Game 'icon.ico'
-  $shell = New-Object -ComObject WScript.Shell
-  foreach ($lnkPath in @($StartMenu, $Desktop)) {
-    $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Dest\do27.ps1`" -FromShortcut"
-    $lnk.WorkingDirectory = $Dest
-    $lnk.Description = 'Direct Order 27 (alpha)'
-    if (Test-Path $icon) { $lnk.IconLocation = "$icon,0" }
-    $lnk.WindowStyle = 7
+  # A missing Start menu or desktop folder (a locked-down or service account) must not stop the
+  # install: the game, the do27 command and the Installed apps entry still get made.
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($lnkPath in @($StartMenu, $Desktop)) {
+      $lnk = $shell.CreateShortcut($lnkPath)
+      $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+      $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Dest\do27.ps1`" -FromShortcut"
+      $lnk.WorkingDirectory = $Dest
+      $lnk.Description = 'Direct Order 27 (alpha)'
+      if (Test-Path $icon) { $lnk.IconLocation = "$icon,0" }
+      $lnk.WindowStyle = 7
+      $lnk.Save()
+    }
+    $lnk = $shell.CreateShortcut($StartMenuUn)
+    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $lnk.Arguments = "/c set DO27_UNINSTALL_PAUSE=1 && `"$Bin\do27-uninstall.cmd`""
+    $lnk.Description = 'Remove Direct Order 27 (alpha)'
     $lnk.Save()
-  }
-  $lnk = $shell.CreateShortcut($StartMenuUn)
-  $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
-  $lnk.Arguments = "/c set DO27_UNINSTALL_PAUSE=1 && `"$Bin\do27-uninstall.cmd`""
-  $lnk.Description = 'Remove Direct Order 27 (alpha)'
-  $lnk.Save()
+  } catch { Warn "No Start menu or desktop shortcut made ($($_.Exception.Message)). Type do27 in a new terminal to play." }
   # Settings > Apps > Installed apps lists it, with an Uninstall button.
   New-Item -Path $ArpKey -Force | Out-Null
   $sizeKB = 0

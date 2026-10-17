@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/media/hero.jpg" width="100%" alt="An X-31 Warhull skims the ice of Bore Twelve on Europa, Jupiter on the horizon">
+  <img src=".github/media/welcome-header.png" width="100%" alt="Direct Order 27: Welcome, recruit.">
 </p>
 
 <p align="center">

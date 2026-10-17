@@ -5,12 +5,35 @@
 set -euo pipefail
 
 REPO="PiercingXX/Alpha-test-DO27"
+# Release-test hooks (not for testers): another repository, a pinned release tag, and a
+# token for a private test repository (never printed, never written to disk).
+REPO_OVERRIDE="${DO27_REPO_OVERRIDE:-}"
+if [ -n "$REPO_OVERRIDE" ]; then
+  [[ "$REPO_OVERRIDE" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "DO27_REPO_OVERRIDE must be owner/name." >&2; exit 1; }
+  REPO=$REPO_OVERRIDE
+fi
+TOKEN="${DO27_GH_TOKEN:-}"
 API="https://api.github.com/repos/$REPO/releases/latest"
+LIST="https://api.github.com/repos/$REPO/releases?per_page=100"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 # Release-test hook: a local copy of the release (latest.json in the GitHub API
-# shape, install.sh and the assets) served over HTTP on the LAN.
+# shape, install.sh and the assets; optionally releases.json, the release list)
+# served over HTTP on the LAN.
 MIRROR="${DO27_ALPHA_MIRROR:-}"
-if [ -n "$MIRROR" ]; then API="$MIRROR/latest.json"; RAW="$MIRROR"; fi
+if [ -n "$MIRROR" ]; then API="$MIRROR/latest.json"; LIST="$MIRROR/releases.json"; RAW="$MIRROR"; fi
+# The release this run installs: the latest one (DO27_PIN_TAG picks another, for tests).
+REL_API=$API
+if [ -n "${DO27_PIN_TAG:-}" ] && [ -z "$MIRROR" ]; then
+  [[ "$DO27_PIN_TAG" =~ ^[A-Za-z0-9_.+-]+$ ]] || { echo "DO27_PIN_TAG is not a tag." >&2; exit 1; }
+  REL_API="https://api.github.com/repos/$REPO/releases/tags/$DO27_PIN_TAG"
+fi
+# With a token: API calls authenticate, and assets download through their API url
+# (curl drops the header on the redirect to the download host).
+api_hdr=(); dl_hdr=()
+if [ -n "$TOKEN" ]; then
+  api_hdr=(-H "Authorization: Bearer $TOKEN")
+  dl_hdr=(-H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream")
+fi
 
 DEST="$HOME/.local/share/do27-alpha"
 BIN="$HOME/.local/bin"
@@ -198,9 +221,61 @@ is_newer() {
 # only the chunks whose checksum changed (usually one small "core" chunk for a patch).
 prepared=0   # 1 once a fresh install or update has just been written
 say "Looking for the latest alpha build..."
-api=$(curl -fsSL "$API" 2>/dev/null) || api=""
-asset_url() { printf '%s' "$api" | grep -oE '"browser_download_url": *"[^"]+"' | sed -E 's/.*"([^"]+)"$/\1/' | grep -E "/$1\$" | head -1 || true; }
+api=$(curl -fsSL ${api_hdr[@]+"${api_hdr[@]}"} "$REL_API" 2>/dev/null) || api=""
 tag=$(printf '%s' "$api" | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/' || true)
+# >>> release lookup
+# A release carries only the parts that changed since the one before it: an unchanged part
+# stays an asset of the older release that first shipped it. Every asset of the GitHub
+# release JSON (one release or a list) as one line:
+#   <release no.> <tag> <draft> <prerelease> <name> <digest> <api url> <download url>
+# A small JSON reader (grep splits the tokens, awk follows the nesting), so the asset's own
+# "url" is never confused with its uploader's.
+json_assets() {
+  LC_ALL=C grep -oE '"([^"\\]|\\.)*"|[][{}:,]|true|false|null' | LC_ALL=C awk '
+    { t = $0 }
+    t == "{" || t == "[" {
+      d++; typ[d] = t; key[d] = ""
+      if (t == "{" && !rel && (d == 1 || (d == 2 && typ[1] == "["))) { rel = d; nrel++; tag = ""; dr = "false"; pr = "false"; na = 0 }
+      else if (t == "{" && rel && d == rel + 2 && typ[rel + 1] == "[" && key[rel] == "assets") { ast = d; an = ""; ad = ""; au = ""; ab = "" }
+      prev = t; next
+    }
+    t == "}" || t == "]" {
+      if (t == "}" && ast && d == ast) { A[++na] = an "\t" ad "\t" au "\t" ab; ast = 0 }
+      else if (t == "}" && rel && d == rel) { for (i = 1; i <= na; i++) print nrel "\t" tag "\t" dr "\t" pr "\t" A[i]; rel = 0 }
+      d--; prev = t; next
+    }
+    t == ":" || t == "," { prev = t; next }
+    {
+      v = t; if (substr(v, 1, 1) == "\"") v = substr(v, 2, length(v) - 2)
+      if (prev == ":") {
+        k = key[d]
+        if (rel && d == rel) { if (k == "tag_name") tag = v; else if (k == "draft") dr = v; else if (k == "prerelease") pr = v }
+        else if (ast && d == ast) { if (k == "name") an = v; else if (k == "digest") ad = v; else if (k == "url") au = v; else if (k == "browser_download_url") ab = v }
+      } else if (typ[d] == "{") key[d] = v
+      prev = t
+    }' || true
+}
+# The assets to search, best first: the release being installed, then every other published
+# release, newest version first. Each line: <name> <digest> <api url> <download url>.
+list=""
+if [ -n "$api" ]; then list=$(curl -fsSL ${api_hdr[@]+"${api_hdr[@]}"} "$LIST" 2>/dev/null) || list=""; fi
+ASSETS=$( {
+  printf '%s\n' "$api" | json_assets | awk -F'\t' '{print "0\t0\t" $0}' || true
+  printf '%s\n' "$list" | json_assets | awk -F'\t' '$3 != "true" && $4 != "true" {v = $2; sub(/^v/, "", v); sub(/[-+].*$/, "", v); print "1\t" v "\t" $0}' || true
+} | LC_ALL=C sort -s -t$'\t' -k1,1n -k2,2Vr -k3,3n | cut -f7-10 || true)
+URL_FIELD=4; [ -z "$TOKEN" ] || URL_FIELD=3
+# part_url NAME [SHA256]: the newest release whose asset NAME has that checksum (GitHub's
+# "digest"), else the newest one with an asset NAME (the checksum check after the download
+# still stops a wrong file).
+part_url() {
+  printf '%s\n' "$ASSETS" | awk -F'\t' -v n="$1" -v s="${2:+sha256:$2}" -v f="$URL_FIELD" '
+    $1 == n && s != "" && $2 == s {print $f; hit = 1; exit}
+    $1 == n && first == "" {first = $f}
+    END {if (!hit && first != "") print first}' || true
+}
+# latest_url NAME: an asset of the release being installed only (its manifests and checksums).
+latest_url() { printf '%s\n' "$api" | json_assets | awk -F'\t' -v n="$1" -v f="$((URL_FIELD + 4))" '$5 == n {print $f; exit}' || true; }
+# <<< release lookup
 STATE="$DEST/chunks"   # one <chunk>.tsv per installed chunk: its "chunk" line + its "file" lines
 GAME="$DEST/game"
 # The package: DO27_TIER, else the one installed (an update keeps it), else this PC's fit.
@@ -214,13 +289,13 @@ else
 fi
 TIER_UP=$(printf '%s' "$tier" | tr '[:lower:]' '[:upper:]')
 man_name="manifest-linux-$tier"
-man_url=$(asset_url "manifest-linux-$tier\\.tsv")
-sum_url=$(asset_url "manifest-linux-$tier\\.json\\.sha256")
+man_url=$(latest_url "manifest-linux-$tier.tsv")
+sum_url=$(latest_url "manifest-linux-$tier.json.sha256")
 if [ -z "$man_url" ]; then
   # A release from before the hardware packages: one package for every PC.
   man_name="manifest-linux"
-  man_url=$(asset_url 'manifest-linux\.tsv')
-  sum_url=$(asset_url 'manifest-linux\.json\.sha256')
+  man_url=$(latest_url manifest-linux.tsv)
+  sum_url=$(latest_url manifest-linux.json.sha256)
   tier=""
 fi
 if [ -z "$man_url" ] || [ -z "$tag" ]; then
@@ -241,7 +316,7 @@ else
   [ -n "$sum_url" ] || die "The release has no checksum file, so the download can't be verified. Please report this."
   dl="$DEST/.download"
   mkdir -p "$dl" "$STATE"
-  curl -fsSL -o "$dl/sums" "$sum_url" && curl -fsSL -o "$dl/$man_name.tsv" "$man_url" \
+  curl -fsSL ${dl_hdr[@]+"${dl_hdr[@]}"} -o "$dl/sums" "$sum_url" && curl -fsSL ${dl_hdr[@]+"${dl_hdr[@]}"} -o "$dl/$man_name.tsv" "$man_url" \
     || die "Couldn't download the build's file list. Check your internet connection and run the command again."
   (cd "$dl" && grep " $man_name.tsv\$" sums | sha256sum -c --status) \
     || die "The build's file list is damaged (checksum mismatch). Run the command again."
@@ -294,19 +369,19 @@ else
   for name in "${todo[@]}"; do
     i=$((i + 1))
     IFS=$'\t' read -r _ _ asset sum size _ < <(awk -F'\t' -v n="$name" '$1=="chunk" && $2==n' "$M")
-    url=$(asset_url "$(printf '%s' "$asset" | sed 's/[.]/\\./g')")
-    [ -n "$url" ] || die "The release is missing the part $asset. Please report this."
+    url=$(part_url "$asset" "$sum")
+    [ -n "$url" ] || die "No release has the part $asset. Please report this."
     part="$dl/$sum.tar.zst"
     if [ -f "$part" ] && [ "$(stat -c %s "$part")" = "$size" ] && [ "$(sha256sum "$part" | cut -d' ' -f1)" = "$sum" ]; then
       say "Part $i of $total ($asset) is already downloaded."
     else
       say "Part $i of $total: $asset ($(( (size + 1048575) / 1048576 )) MB)"
       rc=0
-      curl -fL --progress-bar -C - --retry 3 -o "$part" "$url" || rc=$?
+      curl -fL ${dl_hdr[@]+"${dl_hdr[@]}"} --progress-bar -C - --retry 3 -o "$part" "$url" || rc=$?
       if [ "$rc" = 33 ] || [ "$rc" = 36 ]; then
         # The server can't resume this file: start it again from the beginning.
         rm -f "$part"; rc=0
-        curl -fL --progress-bar --retry 3 -o "$part" "$url" || rc=$?
+        curl -fL ${dl_hdr[@]+"${dl_hdr[@]}"} --progress-bar --retry 3 -o "$part" "$url" || rc=$?
       fi
       [ "$rc" = 0 ] || die "The download failed. Check your internet connection and run the command again (finished parts are kept)."
       if [ "$(sha256sum "$part" | cut -d' ' -f1)" != "$sum" ]; then
@@ -359,10 +434,10 @@ fi
 
 # The alpha license travels with the build: a release asset, kept next to the game. A release
 # without it still installs (a warning only). Fetched after an install or update, or when missing.
-lic_url=$(asset_url 'LICENSE-ALPHA\.txt')
+lic_url=$(part_url LICENSE-ALPHA.txt)
 if [ -n "$lic_url" ] && { [ "$prepared" = 1 ] || [ ! -f "$DEST/LICENSE-ALPHA.txt" ]; }; then
   lic_tmp=$(mktemp "$DEST/.license.XXXXXX")
-  if curl -fsSL -o "$lic_tmp" "$lic_url" && [ -s "$lic_tmp" ]; then
+  if curl -fsSL ${dl_hdr[@]+"${dl_hdr[@]}"} -o "$lic_tmp" "$lic_url" && [ -s "$lic_tmp" ]; then
     chmod 644 "$lic_tmp"; mv -f "$lic_tmp" "$DEST/LICENSE-ALPHA.txt"
   else
     rm -f "$lic_tmp"; warn "Couldn't download LICENSE-ALPHA.txt. The game still installs; the license is on the release page."
@@ -417,7 +492,7 @@ put "$BIN/do27" 755 <<EOF
 #!/usr/bin/env bash
 # Direct Order 27 alpha (written by the installer). Each start checks for a newer
 # alpha build and installs it first (a few seconds; skipped when offline).
-latest=\$(curl -fsS --max-time 4 "$API" 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"\$/\1/' || true)
+latest=\$(curl -fsS --max-time 4 \${DO27_GH_TOKEN:+-H "Authorization: Bearer \$DO27_GH_TOKEN"} "$API" 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"\$/\1/' || true)
 have=\$(cat "$DEST/VERSION" 2>/dev/null)
 # Numeric per field (v0.0.9 < v0.0.10 < v0.1.0); the same version under another tag is a re-publish.
 vnum() { printf '%s' "\$1" | sed -E 's/^v//; s/[-+].*\$//'; }
@@ -428,7 +503,7 @@ fi
 if [ "\$newer" = 1 ]; then
   command -v notify-send >/dev/null && notify-send "Direct Order 27" "Updating to \$latest..." 2>/dev/null || true
   echo "Direct Order 27: updating to \$latest..."
-  curl -fsSL "$RAW/install.sh" | DO27_AUTOUPDATE=1 ${MIRROR:+DO27_ALPHA_MIRROR="$MIRROR"} bash 2>&1 | tee -a "$DEST/update.log" || true
+  curl -fsSL \${DO27_GH_TOKEN:+-H "Authorization: Bearer \$DO27_GH_TOKEN"} "$RAW/install.sh" | DO27_AUTOUPDATE=1 ${MIRROR:+DO27_ALPHA_MIRROR="$MIRROR"} ${REPO_OVERRIDE:+DO27_REPO_OVERRIDE="$REPO"} bash 2>&1 | tee -a "$DEST/update.log" || true
 fi
 cd "$DEST/game" && exec ./run.sh "\$@"
 EOF

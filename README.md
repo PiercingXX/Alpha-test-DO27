@@ -18,7 +18,7 @@ What changed in this build, and what is known to be broken, is in the notes of t
    wget -qO- https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash
    ```
 
-2. Wait. It checks your system, picks the package that fits your graphics card (see **Packages** below), installs anything missing (it may ask for your password once), downloads the game (about 28 GB, in parts; an interrupted download carries on when you run the line again) and checks every part. The first start builds shader caches and shows its progress; that can take several minutes.
+2. Wait. It checks your system, picks the package that fits your graphics card (see **Packages** below), installs anything missing (it may ask for your password once), downloads the game (16 to 31 GB depending on the package, in parts; an interrupted download carries on when you run the line again) and checks every part. The first start builds shader caches and shows its progress; that can take several minutes.
 
 3. Play: open **Direct Order 27 (alpha)** from your app menu, or type `do27` in a terminal. The first time, the game asks you to choose your alpha username.
 
@@ -32,7 +32,7 @@ The game updates itself: each time you start it, it checks for a new alpha build
    irm https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.ps1 | iex
    ```
 
-2. Wait. It checks your PC (Windows version, graphics card, free space), downloads the game in parts (about 29 GB; if the download stops, run the same line again and it carries on) and checks the download. It doesn't need administrator rights.
+2. Wait. It checks your PC (Windows version, graphics card, free space), downloads the game in parts (16 to 31 GB depending on the package; if the download stops, run the same line again and it carries on) and checks the download. It doesn't need administrator rights.
 
 3. Play: open **Direct Order 27 (alpha)** from the Start menu or the shortcut on your desktop, or type `do27` in a new PowerShell window. The first time, the game asks you to choose your alpha username.
 
@@ -50,11 +50,11 @@ The alpha isn't signed with a certificate yet, so Windows may not know it:
 
 The installer reads your graphics card's video memory and picks one package. They differ only in texture detail:
 
-| Package | Video memory | Chosen when |
-| --- | --- | --- |
-| LOW | under 10 GB (on Linux also under 12 GB of RAM) | smaller cards, laptops |
-| HIGH | 10 GB or more | most gaming cards |
-| ULTRA | 20 GB or more | the biggest cards, 4K |
+| Package | Chosen when | Download | Installed |
+| --- | --- | --- | --- |
+| LOW | under 10 GB of video memory, or under 12 GB of RAM | about 16 GB | about 21 GB |
+| HIGH | 10 GB of video memory or more | about 23 GB | about 28 GB |
+| ULTRA | 20 GB of video memory or more | about 31 GB | about 36 GB |
 
 An update keeps the package you have. To choose one yourself, set `DO27_TIER` to `low`, `high` or `ultra` before the install line, for example on Linux: `DO27_TIER=low curl -fsSL https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash`. On Windows: `$env:DO27_TIER='low'` in the same PowerShell window first.
 
@@ -67,14 +67,14 @@ On Linux:
 - On Debian with an NVIDIA card: enable the `contrib` and `non-free` sources, run `sudo apt install nvidia-driver firmware-misc-nonfree` ([Debian guide](https://wiki.debian.org/NvidiaGraphicsDrivers)), restart, then run the install line.
 - On Debian, your account needs `sudo` (if you set a root password during setup, it doesn't have it). The installer tells you the one `su -c` line to run instead if it can't use `sudo`.
 - A graphics card with Vulkan: an NVIDIA RTX 2080 or newer, or an AMD RX 6000 or newer
-- An NVMe SSD with 55 GB free (the game takes about 52 GB once installed)
+- An NVMe SSD with 25 to 40 GB free, depending on the package (see **Packages**; the installer checks it)
 - 16 GB of RAM
 
 On Windows:
 
 - Windows 10 (version 21H2 or newer) or Windows 11, 64-bit
 - A graphics card with DirectX 12 and an up-to-date driver: an NVIDIA RTX 2080 or newer, or an AMD RX 6000 or newer
-- An SSD with 60 GB free on the drive Windows is on (the game takes about 52 GB once installed)
+- An SSD with 25 to 40 GB free on the drive Windows is on, depending on the package (see **Packages**; the installer checks it)
 - 16 GB of RAM
 
 ## Your alpha username

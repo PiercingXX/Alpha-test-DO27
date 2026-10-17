@@ -1,8 +1,10 @@
-# Direct Order 27: alpha test
+# Direct Order 27: alpha test (v0.0.6)
 
 Thanks for testing! This repository holds the packaged alpha build only. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 
-## Linux: install in 3 steps
+What changed in this build, and what is known to be broken, is in the notes of the latest release: **Releases > Latest**.
+
+## Linux (Arch, CachyOS, Ubuntu, Debian): install in 3 steps
 
 1. Open a terminal, paste this line, and press Enter:
 
@@ -16,7 +18,7 @@ Thanks for testing! This repository holds the packaged alpha build only. It runs
    wget -qO- https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash
    ```
 
-2. Wait. It checks your system, installs anything missing (it may ask for your password once), downloads the game (about 28 GB, in parts; an interrupted download carries on when you run the line again) and checks every part.
+2. Wait. It checks your system, picks the package that fits your graphics card (see **Packages** below), installs anything missing (it may ask for your password once), downloads the game (about 28 GB, in parts; an interrupted download carries on when you run the line again) and checks every part. The first start builds shader caches and shows its progress; that can take several minutes.
 
 3. Play: open **Direct Order 27 (alpha)** from your app menu, or type `do27` in a terminal. The first time, the game asks you to choose your alpha username.
 
@@ -43,6 +45,18 @@ The alpha isn't signed with a certificate yet, so Windows may not know it:
 - **A blue box, "Windows protected your PC":** click **More info**, then **Run anyway**. You only see this once.
 - **"Smart App Control blocked an app":** Smart App Control has no "run anyway". The installer tells you if it's on. To play, turn it off: Start > **Windows Security** > **App & browser control** > **Smart App Control settings** > **Off**.
 - **Your antivirus removes or blocks `do27_launcher.exe`:** allow the folder `%LOCALAPPDATA%\DO27-alpha` in your antivirus, then run the install line again.
+
+## Packages: LOW, HIGH, ULTRA
+
+The installer reads your graphics card's video memory and picks one package. They differ only in texture detail:
+
+| Package | Video memory | Chosen when |
+| --- | --- | --- |
+| LOW | under 10 GB (on Linux also under 12 GB of RAM) | smaller cards, laptops |
+| HIGH | 10 GB or more | most gaming cards |
+| ULTRA | 20 GB or more | the biggest cards, 4K |
+
+An update keeps the package you have. To choose one yourself, set `DO27_TIER` to `low`, `high` or `ultra` before the install line, for example on Linux: `DO27_TIER=low curl -fsSL https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash`. On Windows: `$env:DO27_TIER='low'` in the same PowerShell window first.
 
 ## What you need
 
@@ -94,9 +108,15 @@ There is no relay in the alpha: players connect straight to the host. In the gam
 
 The first screen asks for your username and says it plainly: this alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree.
 
+## Controls
+
+Every key lives in one file you can edit, `~/.config/DO27/key.map` on Linux or `%APPDATA%\DO27\key.map` on Windows. Each line names its action and says where the default came from. The same bindings are in the game under **Settings > Input**, which writes the same file. The default is built for a Colemak keyboard and has a QWERTY version with the keys in the same places; pick yours on the first start. Menus also take `h` `j` `k` `l`.
+
 ## Reporting problems
 
-Crash and session logs are sent to the dev team automatically, so a crash gets reported even if you do nothing. To tell us what happened, open an issue here (**Issues > New issue > Bug report**) or post in the alpha channel on Discord. Include your alpha username and the time it happened.
+Crash and session logs are sent to the dev team automatically, so a crash gets reported even if you do nothing: during play, when you quit, and on the next start after a crash. To tell us what happened, open an issue here (**Issues > New issue > Bug report**) or post in the alpha channel on Discord. Include your alpha username and the time it happened.
+
+If we ask for your logs, they are in `~/.local/share/do27/logs/` on Linux and under `%LOCALAPPDATA%\DO27\` on Windows. Zip the newest session folder and send it in the issue or on Discord.
 
 ## What the alpha logs
 
@@ -119,4 +139,8 @@ On Windows: **Settings > Apps > Installed apps > Direct Order 27 (alpha) > Unins
 
 This removes the game, the commands, the app-menu or Start menu entries, your settings, logs and caches. Your alpha username stays reserved until the alpha ends. On Linux the system packages stay: they're standard Arch, Ubuntu or Debian packages that other programs use too.
 
-This is a test build under the alpha license in `LICENSE-ALPHA.txt`. Please don't share it outside the alpha.
+## License and checking your download
+
+This is a test build under the alpha license in [`LICENSE-ALPHA.txt`](LICENSE-ALPHA.txt). It is a personal, revocable license to test; please don't share the build or anything from it. The installer also copies the license into your install folder.
+
+Each release carries `SHA256SUMS-<version>.txt`, the SHA-256 of every file in it, and an OpenTimestamps proof of that list (`.ots`) that dates the release. The installer already checks every part it downloads; you don't need to do anything.

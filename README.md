@@ -44,7 +44,7 @@
 
 ## Alpha test (v0.0.6)
 
-Thanks for testing! This repository holds the packaged alpha build only. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
+Thanks for testing! This is where you download and install the Direct Order 27 alpha. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 
 What changed in this build, and what is known to be broken, is in the notes of the latest release: **Releases > Latest**.
 

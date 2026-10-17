@@ -42,7 +42,7 @@
 
 ---
 
-## Alpha test (v0.0.6)
+## Alpha test: Direct Order 27 v0.1 alpha (v0.1.0)
 
 Thanks for testing! This is where you download and install the Direct Order 27 alpha. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 
@@ -150,7 +150,31 @@ On Windows:
 
 There is no relay in the alpha: players connect straight to the host. In the game, the host opens **HOST** and **LISTEN**; the lobby shows `LAN IP:7790` for players on the same network. For friends over the internet, the host forwards **UDP 7790** on their router and gives them their public IP with `:7790`. A joiner picks **JOIN HOST BY ADDRESS**, types `IP:7790`, **NEXT**, then **JOIN MATCH**. The full steps are in the testers guide.
 
+Everyone in a match must run the same version.
+
 The first screen asks for your username and says it plainly: this alpha sends every log (game, engine, match, network, crash, performance), your username and your IP address to the developer automatically. It can't be turned off. Playing means you agree.
+
+## Hosting a match
+
+The host's PC must let the game receive UDP port 7790. Joiners need nothing.
+
+On Linux, allow it in your firewall:
+
+- ufw:
+
+  ```
+  sudo ufw allow 7790/udp
+  ```
+
+- firewalld:
+
+  ```
+  sudo firewall-cmd --add-port=7790/udp --permanent && sudo firewall-cmd --reload
+  ```
+
+On Windows: when the game first starts, Windows Defender Firewall asks whether to allow it. Allow it on **Private networks**. If you missed that prompt, add an inbound rule for **UDP port 7790** in Windows Defender Firewall.
+
+If the game says the router could not be mapped, also forward **UDP 7790** to your PC on your router.
 
 ## Controls
 

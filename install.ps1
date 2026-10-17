@@ -13,12 +13,29 @@ $ProgressPreference = 'SilentlyContinue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $Repo = 'PiercingXX/Alpha-test-DO27'
+# Release-test hooks (not for testers): another repository, a pinned release tag, and a
+# token for a private test repository (never printed, never written to disk).
+$RepoOverride = "$env:DO27_REPO_OVERRIDE"
+if ($RepoOverride) {
+  if ($RepoOverride -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { Write-Host 'DO27_REPO_OVERRIDE must be owner/name.'; return }
+  $Repo = $RepoOverride
+}
+$Token = "$env:DO27_GH_TOKEN"
 $Api = "https://api.github.com/repos/$Repo/releases/latest"
+$List = "https://api.github.com/repos/$Repo/releases?per_page=100"
 $Raw = "https://raw.githubusercontent.com/$Repo/main"
 # Release-test hook: a local copy of the release (latest.json in the GitHub API shape,
-# install.ps1 and the assets) served over HTTP.
+# install.ps1 and the assets; optionally releases.json, the release list) served over HTTP.
 $Mirror = $env:DO27_ALPHA_MIRROR
-if ($Mirror) { $Api = "$Mirror/latest.json"; $Raw = $Mirror }
+if ($Mirror) { $Api = "$Mirror/latest.json"; $List = "$Mirror/releases.json"; $Raw = $Mirror }
+# The release this run installs: the latest one (DO27_PIN_TAG picks another, for tests).
+$RelApi = $Api
+if ($env:DO27_PIN_TAG -and -not $Mirror) {
+  if ($env:DO27_PIN_TAG -notmatch '^[A-Za-z0-9_.+-]+$') { Write-Host 'DO27_PIN_TAG is not a tag.'; return }
+  $RelApi = "https://api.github.com/repos/$Repo/releases/tags/$($env:DO27_PIN_TAG)"
+}
+$ApiHeaders = @{ 'User-Agent' = 'do27-installer' }
+if ($Token) { $ApiHeaders['Authorization'] = "Bearer $Token" }
 $Auto = [bool]$env:DO27_AUTOUPDATE
 
 $Dest = Join-Path $env:LOCALAPPDATA 'DO27-alpha'
@@ -43,6 +60,50 @@ function TagVersion($t) {
   if ("$t" -match '^v?(\d+)\.(\d+)\.(\d+)') { return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3]) }
   return $null
 }
+# >>> release lookup
+# A release carries only the parts that changed since the one before it: an unchanged part
+# stays an asset of the older release that first shipped it. PoolOf lists every asset to
+# search, best first: the release being installed, then every other published release,
+# newest version first. Each: @{ Name; Digest; Url; Browser }.
+function JGet($o, $k) { if ($o -is [System.Collections.IDictionary]) { return $o[$k] } return $o.$k }
+function PoolOf($releases) {
+  $first = $true; $cands = @(); $i = 0
+  foreach ($r in @($releases)) {
+    if (-not $r) { continue }
+    $i++
+    if (-not $first -and ((JGet $r 'draft') -or (JGet $r 'prerelease'))) { continue }
+    $v = TagVersion (JGet $r 'tag_name')
+    if (-not $v) { $v = [version]::new(0, 0, 0) }
+    $cands += New-Object PSObject -Property @{ R = $r; V = $v; I = $(if ($first) { 0 } else { $i }); F = $(if ($first) { 0 } else { 1 }) }
+    $first = $false
+  }
+  $out = New-Object System.Collections.ArrayList
+  foreach ($c in @($cands | Sort-Object -Property @{ Expression = { $_.F } }, @{ Expression = { $_.V }; Descending = $true }, @{ Expression = { $_.I } })) {
+    foreach ($a in @(JGet $c.R 'assets')) {
+      if (-not $a) { continue }
+      [void]$out.Add((New-Object PSObject -Property @{ Name = [string](JGet $a 'name'); Digest = [string](JGet $a 'digest'); Url = [string](JGet $a 'url'); Browser = [string](JGet $a 'browser_download_url') }))
+    }
+  }
+  return $out
+}
+# FindAsset NAME [SHA256]: the newest release whose asset NAME has that checksum (GitHub's
+# "digest"), else the newest one with an asset NAME (the checksum check after the download
+# still stops a wrong file).
+function FindAsset($pool, $name, $sum) {
+  if ($sum) { foreach ($p in $pool) { if ($p.Name -ceq $name -and $p.Digest -eq "sha256:$sum") { return $p } } }
+  foreach ($p in $pool) { if ($p.Name -ceq $name) { return $p } }
+  return $null
+}
+# The address curl downloads an asset from. With a token: the asset's API url answers with a
+# redirect to a signed download address, which is fetched without the token.
+function DlUrl($a) {
+  if (-not $Token) { return $a.Browser }
+  $nul = if ($PSVersionTable.PSVersion.Major -lt 6 -or $IsWindows) { 'NUL' } else { '/dev/null' }
+  $loc = & curl.exe -sS --retry 3 -o $nul -w '%{redirect_url}' -H "Authorization: Bearer $Token" -H 'Accept: application/octet-stream' -H 'User-Agent: do27-installer' $a.Url
+  if ($LASTEXITCODE -eq 0 -and "$loc" -match '^https://') { return "$loc" }
+  return $a.Browser
+}
+# <<< release lookup
 # Every graphics card DXGI lists (the adapters the game itself sees), with its own (dedicated)
 # video memory: @{ Name; Bytes; Vendor }. Software adapters are left out. A card built into the
 # CPU reports only a small carve-out, so it lands in the LOW package. $null if DXGI can't be asked.
@@ -202,11 +263,28 @@ try {
   #    update carries on where it stopped when the command runs again.
   Say 'Looking for the latest alpha build...'
   $rel = $null; $man = $null; $todo = $null
-  try { $rel = Invoke-RestMethod -Uri $Api -TimeoutSec 30 -Headers @{ 'User-Agent' = 'do27-installer' } } catch {}
-  $tag = $null; $assets = @{}
+  # Windows PowerShell 5.1's ConvertFrom-Json stops at 2 MB: read big JSON with no size limit.
+  # PowerShell 7 (pwsh) has no System.Web (Add-Type fails with "Could not load type
+  # System.Web.UI.WebResourceAttribute") and no size limit: ConvertFrom-Json -AsHashtable there.
+  if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $parseJson = { param($t) $t | ConvertFrom-Json -AsHashtable }
+  } else {
+    Add-Type -AssemblyName System.Web.Extensions
+    $json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $json.MaxJsonLength = [int]::MaxValue
+    $parseJson = { param($t) $json.DeserializeObject($t) }
+  }
+  $readJson = { param($p) & $parseJson ([IO.File]::ReadAllText($p)) }
+  try { $rel = Invoke-RestMethod -Uri $RelApi -TimeoutSec 30 -Headers $ApiHeaders } catch {}
+  $tag = $null; $assets = @{}; $pool = @()
   if ($rel) {
     $tag = $rel.tag_name
-    foreach ($a in @($rel.assets)) { if ($a.name) { $assets[$a.name] = $a } }
+    # Every release (one call; the list grows past 5.1's JSON limit, so it is read as text).
+    $relList = $null
+    try { $relList = & $parseJson (Invoke-WebRequest -UseBasicParsing -Uri $List -TimeoutSec 30 -Headers $ApiHeaders).Content } catch {}
+    $pool = @(PoolOf (@($rel) + @($relList)))
+    # The release's own assets: its manifests and checksum files come from it only.
+    foreach ($a in @(PoolOf @($rel))) { if ($a.Name) { $assets[$a.Name] = $a } }
   }
   $verFile = Join-Path $Dest 'VERSION'
   $tierFile = Join-Path $Dest 'TIER'
@@ -242,23 +320,12 @@ try {
     New-Item -ItemType Directory -Force -Path $dl, $Game | Out-Null
     $manFile = Join-Path $dl 'manifest-windows.json'
     $manSumFile = Join-Path $dl 'manifest-windows.json.sha256'
-    & curl.exe -fsSL --retry 3 -o $manFile $manAsset.browser_download_url
+    & curl.exe -fsSL --retry 3 -o $manFile (DlUrl $manAsset)
     $rc1 = $LASTEXITCODE
-    & curl.exe -fsSL --retry 3 -o $manSumFile $assets["$manName.json.sha256"].browser_download_url
+    & curl.exe -fsSL --retry 3 -o $manSumFile (DlUrl $assets["$manName.json.sha256"])
     if ($rc1 -ne 0 -or $LASTEXITCODE -ne 0) { Fail "Couldn't download the build's file list. Check your internet connection and run the command again." }
     $wantMan = ((Get-Content $manSumFile -TotalCount 1) -split '\s+')[0].ToLower()
     if ((Get-FileHash -Algorithm SHA256 $manFile).Hash.ToLower() -ne $wantMan) { Fail "The build's file list is damaged (checksum mismatch). Run the command again." }
-    # Windows PowerShell 5.1's ConvertFrom-Json stops at 2 MB: read it with no size limit.
-    # PowerShell 7 (pwsh) has no System.Web (Add-Type fails with "Could not load type
-    # System.Web.UI.WebResourceAttribute") and no size limit: ConvertFrom-Json -AsHashtable there.
-    if ($PSVersionTable.PSVersion.Major -ge 6) {
-      $readJson = { param($p) [IO.File]::ReadAllText($p) | ConvertFrom-Json -AsHashtable }
-    } else {
-      Add-Type -AssemblyName System.Web.Extensions
-      $json = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-      $json.MaxJsonLength = [int]::MaxValue
-      $readJson = { param($p) $json.DeserializeObject([IO.File]::ReadAllText($p)) }
-    }
     $man = & $readJson $manFile
     if ($man['format'] -ne 1 -or $man['platform'] -ne 'windows') { Fail 'This build needs a newer installer. Run the install command from the alpha page again.' }
     $chunks = @($man['chunks'])
@@ -296,12 +363,13 @@ try {
     if ($env:DO27_TEST_NO_TAR_ZSTD) { $tarZstd = $false }
     if (-not $tarZstd) {
       $tool = @($man['tools']) | Where-Object { $_['name'] -eq 'zstd' } | Select-Object -First 1
-      if (-not $tool -or -not $assets[$tool['asset']]) { Fail 'This PC needs zstd to unpack the game, and the release has none. Please report this.' }
+      $toolAsset = if ($tool) { FindAsset $pool $tool['asset'] $tool['sha256'] } else { $null }
+      if (-not $toolAsset) { Fail 'This PC needs zstd to unpack the game, and the release has none. Please report this.' }
       $toolsDir = Join-Path $Dest 'tools'
       New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
       $zstdExe = Join-Path $toolsDir 'zstd.exe'
       if (-not (Test-Path $zstdExe) -or (Get-FileHash -Algorithm SHA256 $zstdExe).Hash.ToLower() -ne $tool['sha256']) {
-        & curl.exe -fsSL --retry 3 -o $zstdExe $assets[$tool['asset']].browser_download_url
+        & curl.exe -fsSL --retry 3 -o $zstdExe (DlUrl $toolAsset)
         if ($LASTEXITCODE -ne 0 -or (Get-FileHash -Algorithm SHA256 $zstdExe).Hash.ToLower() -ne $tool['sha256']) {
           Remove-Item $zstdExe -Force -ErrorAction SilentlyContinue
           Fail "Couldn't download zstd (needed to unpack the game on Windows 10). Run the command again."
@@ -314,20 +382,20 @@ try {
     $n = 0
     foreach ($c in $todo) {
       $n++
-      $asset = $assets[$c['asset']]
-      if (-not $asset) { Fail "The release is missing part $($c['asset']). Please report this." }
+      $asset = FindAsset $pool $c['asset'] $c['sha256']
+      if (-not $asset) { Fail "No release has part $($c['asset']). Please report this." }
       $file = Join-Path $dl $c['asset']
       $have = ''
       if ((Test-Path $file) -and (Get-Item $file).Length -eq [int64]$c['size']) { $have = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLower() }
       if ($have -ne $c['sha256']) {
         if ((Test-Path $file) -and (Get-Item $file).Length -gt [int64]$c['size']) { Remove-Item $file -Force }
         Write-Host ("    part {0} of {1}: {2} ({3})" -f $n, $todo.Count, $c['name'], (Size ([double]$c['size'])))
-        & curl.exe -fL '-#' -C - --retry 3 -o $file $asset.browser_download_url
+        & curl.exe -fL '-#' -C - --retry 3 -o $file (DlUrl $asset)
         $rc = $LASTEXITCODE
         if ($rc -eq 33 -or $rc -eq 36) {
           # The server can't resume this file: start it again from the beginning.
           Remove-Item $file -Force -ErrorAction SilentlyContinue
-          & curl.exe -fL '-#' --retry 3 -o $file $asset.browser_download_url
+          & curl.exe -fL '-#' --retry 3 -o $file (DlUrl $asset)
           $rc = $LASTEXITCODE
         }
         if ($rc -ne 0) { Fail 'The download failed. Check your internet connection and run the command again.' }
@@ -390,10 +458,11 @@ try {
   # The alpha license travels with the build: a release asset, kept next to the TIER file. A
   # release without it still installs (a warning only). Fetched after an install or update, or when missing.
   $licFile = Join-Path $Dest 'LICENSE-ALPHA.txt'
-  $licAsset = $assets['LICENSE-ALPHA.txt']
+  $licAsset = FindAsset $pool 'LICENSE-ALPHA.txt'
+
   if ($licAsset -and ($prepared -or -not (Test-Path $licFile))) {
     $licTmp = "$licFile.part"
-    & curl.exe -fsSL --retry 3 -o $licTmp $licAsset.browser_download_url
+    & curl.exe -fsSL --retry 3 -o $licTmp (DlUrl $licAsset)
     if ($LASTEXITCODE -eq 0 -and (Test-Path $licTmp) -and (Get-Item $licTmp).Length -gt 0) {
       Move-Item -Force $licTmp $licFile
     } else {
@@ -481,12 +550,15 @@ $Game = Join-Path $Dest 'game'
 $Api = '__API__'
 $Raw = '__RAW__'
 $Mirror = '__MIRROR__'
+$RepoOverride = '__REPO_OVERRIDE__'
 if ($GameArgs -and $GameArgs[0] -eq 'preflight') {
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dest 'preflight.ps1')
   return
 }
 $latest = $null
-try { $latest = (Invoke-RestMethod -Uri $Api -TimeoutSec 4 -Headers @{ 'User-Agent' = 'do27-launcher' }).tag_name } catch {}
+$h = @{ 'User-Agent' = 'do27-launcher' }
+if ($env:DO27_GH_TOKEN) { $h['Authorization'] = "Bearer $($env:DO27_GH_TOKEN)" }
+try { $latest = (Invoke-RestMethod -Uri $Api -TimeoutSec 4 -Headers $h).tag_name } catch {}
 $have = ''
 if (Test-Path (Join-Path $Dest 'VERSION')) { $have = (Get-Content (Join-Path $Dest 'VERSION') -TotalCount 1).Trim() }
 # Update only to a NEWER build: tags compared field by field as numbers (v0.0.9 < v0.1.0).
@@ -501,7 +573,10 @@ if ($latest -and $latest -ne $have -and $vLatest -and (-not $vHave -or $vLatest 
   # The update's messages also go to update.log (a transcript: the curl progress stays on screen).
   $cmd = "Start-Transcript -Append -Path '$log' | Out-Null; `$env:DO27_AUTOUPDATE='1'; " +
     $(if ($Mirror) { "`$env:DO27_ALPHA_MIRROR='$Mirror'; " } else { '' }) +
-    "Write-Host 'Direct Order 27: updating to $latest...'; irm '$Raw/install.ps1' | iex; Stop-Transcript | Out-Null"
+    $(if ($RepoOverride) { "`$env:DO27_REPO_OVERRIDE='$RepoOverride'; " } else { '' }) +
+    "Write-Host 'Direct Order 27: updating to $latest...'; " +
+    $(if ($env:DO27_GH_TOKEN) { "irm '$Raw/install.ps1' -Headers @{ Authorization = 'Bearer ' + `$env:DO27_GH_TOKEN } | iex; " } else { "irm '$Raw/install.ps1' | iex; " }) +
+    "Stop-Transcript | Out-Null"
   # -EncodedCommand: no quoting trouble on any command line.
   $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
   if ($FromShortcut) {
@@ -533,7 +608,7 @@ if (-not $FromShortcut) {
   $p.WaitForExit()
 }
 '@
-  $launcher = $launcher.Replace('__API__', $Api).Replace('__RAW__', $Raw).Replace('__MIRROR__', "$Mirror")
+  $launcher = $launcher.Replace('__API__', $Api).Replace('__RAW__', $Raw).Replace('__MIRROR__', "$Mirror").Replace('__REPO_OVERRIDE__', $RepoOverride)
   Set-Content -Path (Join-Path $Dest 'do27.ps1') -Value $launcher -Encoding UTF8
 
   # preflight.ps1: what "do27 preflight" prints (for bug reports).
@@ -614,22 +689,26 @@ if ($env:DO27_UNINSTALL_PAUSE) { Start-Sleep 6 }
   }
 
   $icon = Join-Path $Game 'icon.ico'
-  $shell = New-Object -ComObject WScript.Shell
-  foreach ($lnkPath in @($StartMenu, $Desktop)) {
-    $lnk = $shell.CreateShortcut($lnkPath)
-    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Dest\do27.ps1`" -FromShortcut"
-    $lnk.WorkingDirectory = $Dest
-    $lnk.Description = 'Direct Order 27 (alpha)'
-    if (Test-Path $icon) { $lnk.IconLocation = "$icon,0" }
-    $lnk.WindowStyle = 7
+  # A missing Start menu or desktop folder (a locked-down or service account) must not stop the
+  # install: the game, the do27 command and the Installed apps entry still get made.
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($lnkPath in @($StartMenu, $Desktop)) {
+      $lnk = $shell.CreateShortcut($lnkPath)
+      $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+      $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Dest\do27.ps1`" -FromShortcut"
+      $lnk.WorkingDirectory = $Dest
+      $lnk.Description = 'Direct Order 27 (alpha)'
+      if (Test-Path $icon) { $lnk.IconLocation = "$icon,0" }
+      $lnk.WindowStyle = 7
+      $lnk.Save()
+    }
+    $lnk = $shell.CreateShortcut($StartMenuUn)
+    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $lnk.Arguments = "/c set DO27_UNINSTALL_PAUSE=1 && `"$Bin\do27-uninstall.cmd`""
+    $lnk.Description = 'Remove Direct Order 27 (alpha)'
     $lnk.Save()
-  }
-  $lnk = $shell.CreateShortcut($StartMenuUn)
-  $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
-  $lnk.Arguments = "/c set DO27_UNINSTALL_PAUSE=1 && `"$Bin\do27-uninstall.cmd`""
-  $lnk.Description = 'Remove Direct Order 27 (alpha)'
-  $lnk.Save()
+  } catch { Warn "No Start menu or desktop shortcut made ($($_.Exception.Message)). Type do27 in a new terminal to play." }
   # Settings > Apps > Installed apps lists it, with an Uninstall button.
   New-Item -Path $ArpKey -Force | Out-Null
   $sizeKB = 0

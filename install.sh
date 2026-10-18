@@ -42,12 +42,136 @@ APPS="$HOME/.local/share/applications"
 if [ -t 1 ]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; N=$'\e[0m'; else B= G= Y= R= N=; fi
 say()  { printf '%s==>%s %s\n' "$B$G" "$N" "$*"; }
 warn() { printf '%s!!%s  %s\n' "$B$Y" "$N" "$*"; }
-die()  { printf '%sXX%s  %s\n' "$B$R" "$N" "$*"; printf '    Need help? Post this message in the alpha channel on Discord.\n'; exit 1; }
 # Replace a file with a new inode, so a script that is running from it (the
 # do27 launcher during an auto-update) keeps reading its old copy.
 put() { local tmp; tmp=$(mktemp "$1.XXXXXX"); cat > "$tmp"; chmod "${2:-644}" "$tmp"; mv -f "$tmp" "$1"; }
 
+# ---- Update progress, lock and exit codes -------------------------------------------------
+# AUTO is set by the do27 command (every start): the update runs without a terminal when the
+# game is opened from the app menu, so it shows its progress in a window or notifications and
+# the command starts the game when this script ends. Exit codes in that mode: 0 done (or
+# nothing to do), 1 failed (the command still starts the installed game), 75 another update
+# is running (the command starts nothing).
+AUTO="${DO27_AUTOUPDATE:-}"
+mkdir -p "$DEST"
+PROGRESS_FILE="$DEST/update.progress"   # "part 6 of 14" while an update runs (the lock message reads it)
+ui=text; ui_fd=; ui_pid=; ui_ref=; ui_last=0; ui_fail_shown=; have_lock=
+if [ -n "$AUTO" ]; then
+  case "${DO27_UI:-}" in
+    text|zenity|kdialog|notify|none) ui=$DO27_UI ;;
+    *)
+      # With a terminal (the do27 command typed in one) the text below is the display.
+      if ! { : </dev/tty; } 2>/dev/null; then
+        ui=none
+        if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+          if command -v zenity >/dev/null; then ui=zenity
+          elif command -v kdialog >/dev/null && { command -v qdbus >/dev/null || command -v qdbus6 >/dev/null || command -v qdbus-qt5 >/dev/null; }; then ui=kdialog
+          elif command -v notify-send >/dev/null; then ui=notify; fi
+        elif command -v notify-send >/dev/null; then ui=notify; fi
+      fi ;;
+  esac
+fi
+# Every write goes through a subshell: a window the player closed must never end the update.
+ui_send() { [ -n "$ui_fd" ] || return 0; ( printf '%s\n' "$@" >&8 ) 2>/dev/null || true; }
+ui_notify() { command -v notify-send >/dev/null && notify-send -a "Direct Order 27" -h string:x-canonical-private-synchronous:do27-update "Direct Order 27" "$1" 2>/dev/null || true; }
+qd() { local q; for q in qdbus qdbus6 qdbus-qt5; do command -v "$q" >/dev/null && { "$q" "$@" 2>/dev/null || true; return; }; done; }
+ui_open() {
+  case "$ui" in
+    zenity)
+      ui_fifo="$DEST/.ui.fifo.$$"; rm -f "$ui_fifo"; mkfifo "$ui_fifo" 2>/dev/null || { ui=notify; return 0; }
+      zenity --progress --no-cancel --title="Direct Order 27" --text="$1" --percentage=0 --width=460 <"$ui_fifo" >/dev/null 2>&1 9>&- &
+      ui_pid=$!
+      exec 8>"$ui_fifo"; ui_fd=8; rm -f "$ui_fifo" ;;
+    kdialog) ui_ref=$(kdialog --title "Direct Order 27" --progressbar "$1" 100 2>/dev/null 9>&- || true) ;;
+    notify) ui_notify "$1" ;;
+  esac
+}
+# ui_set PERCENT TEXT (PERCENT -1: unchanged)
+ui_set() {
+  local now=$SECONDS
+  case "$ui" in
+    zenity) [ "$1" -lt 0 ] || ui_send "$1"; ui_send "# $2" ;;
+    kdialog) [ -z "$ui_ref" ] || { [ "$1" -lt 0 ] || qd $ui_ref Set "" value "$1"; qd $ui_ref setLabelText "$2"; } ;;
+    notify) [ $((now - ui_last)) -ge 5 ] || [ "${3:-}" = now ] || return 0; ui_last=$now; ui_notify "$2" ;;
+  esac
+}
+ui_close() {
+  case "$ui" in
+    zenity) [ -z "$ui_fd" ] || { ui_send 100; exec 8>&-; ui_fd=; }
+            [ -z "$ui_pid" ] || { kill "$ui_pid" 2>/dev/null || true; ui_pid=; } ;;
+    kdialog) [ -z "$ui_ref" ] || { qd $ui_ref close; ui_ref=; } ;;
+  esac
+}
+# A message that stays until the player closes it (a failure), apart from the progress window.
+ui_alert() {
+  case "$ui" in
+    zenity) ui_close; zenity --warning --no-wrap --title="Direct Order 27" --text="$1" >/dev/null 2>&1 9>&- & ;;
+    kdialog) ui_close; kdialog --title "Direct Order 27" --sorry "$1" >/dev/null 2>&1 9>&- & ;;
+    notify) command -v notify-send >/dev/null && notify-send -u critical -a "Direct Order 27" -h string:x-canonical-private-synchronous:do27-update "Direct Order 27" "$1" 2>/dev/null || true ;;
+  esac
+}
+fmt_bytes() { awk -v b="$1" 'BEGIN {if (b >= 1073741824) printf "%.1f GB", b / 1073741824; else printf "%d MB", b / 1048576 + 0.5}'; }
+fmt_eta() { awk -v s="$1" 'BEGIN {if (s < 90) printf "under a minute"; else printf "about %d min", (s + 59) / 60}'; }
+mixed_msg() { echo "The update to $(head -1 "$DEST/update.mixed" 2>/dev/null) did not finish. Start Direct Order 27 again to continue it (it picks up where it stopped)."; }
+die() {
+  printf '%sXX%s  %s\n' "$B$R" "$N" "$*"; printf '    Need help? Post this message in the alpha channel on Discord.\n'
+  if [ -n "$AUTO" ]; then
+    ui_fail_shown=1
+    if [ -f "$DEST/update.mixed" ]; then ui_alert "$(mixed_msg)"
+    elif [ -x "$DEST/game/run.sh" ]; then ui_alert "The update failed: $* Starting the version you already have."
+    else ui_alert "The install failed: $*"; fi
+  fi
+  exit 1
+}
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  if [ "$rc" -ne 0 ] && [ -n "$AUTO" ] && [ -z "$ui_fail_shown" ] && [ "$rc" -ne 75 ]; then
+    ui_fail_shown=1
+    printf '!!  The update stopped before it finished (a finished part is kept; the next start carries on).\n'
+    if [ -f "$DEST/update.mixed" ]; then ui_alert "$(mixed_msg)"
+    else ui_alert "The update stopped before it finished. Starting the version you already have; the next start carries on."; fi
+
+  fi
+  # An older do27 command would start the half-updated game when this script ends: stop it.
+  if [ "$rc" -ne 0 ] && [ -n "$AUTO" ] && [ -f "$DEST/update.mixed" ] && [ -z "${DO27_WRAPPER:-}" ] \
+     && tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -qE '(^|[ /])do27 '; then
+    kill "$PPID" 2>/dev/null || true
+  fi
+  ui_close
+  [ -z "$have_lock" ] || rm -f "$PROGRESS_FILE"
+  rm -f "$DEST"/.ui.fifo.* 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 143' HUP INT TERM
+
 printf '\n%sDirect Order 27: alpha installer%s\n\n' "$B" "$N"
+
+# One update at a time. The do27 command holds the lock itself (DO27_LOCK_HELD) and starts this
+# script as its child; any other run (the install line in a terminal, or an older do27 command
+# that doesn't know about the lock) takes it here, or says an update is already running.
+if [ -z "${DO27_LOCK_HELD:-}" ] && command -v flock >/dev/null; then
+  exec 9>"$DEST/update.lock"
+  if flock -n 9; then
+    have_lock=1
+  else
+    prog=$(cat "$PROGRESS_FILE" 2>/dev/null || true)
+    txt="Already updating${prog:+ ($prog)}. Direct Order 27 starts when the update is done."
+    say "$txt"
+    if [ -n "$AUTO" ]; then
+      ui_open "$txt"; ui_set -1 "$txt" now; sleep 1
+      # An older do27 command goes on to start the game when this script ends: stop it, so a
+      # second click starts neither a second download nor a second game.
+      if [ -z "${DO27_WRAPPER:-}" ] && tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -qE '(^|[ /])do27 '; then
+        kill "$PPID" 2>/dev/null || true
+      fi
+    fi
+    exit 75
+  fi
+else
+  have_lock=1
+fi
 
 # 1. The system: Arch/CachyOS (pacman), or Ubuntu 22.04+ / Debian 12+ and their family (apt).
 [ "$(id -u)" -ne 0 ] || die "Don't run this as root. Run it as your normal user (it asks for your password once if it needs to)."
@@ -354,11 +478,25 @@ else
     die "Not enough free space in your home folder: $(( free_b / 1073741824 )) GB free, this needs $(( need_b / 1073741824 )) GB. Free some space and run the command again.${smaller:+ Or install the smaller ${smaller^^} package: curl -fsSL $RAW/install.sh | env DO27_TIER=$smaller bash}"
   fi
   total=${#todo[@]}
-  if [ -d "$STATE" ] && [ "$(ls "$STATE" 2>/dev/null | wc -l)" -gt 0 ] && [ -x "$GAME/run.sh" ]; then
-    say "Updating to $tag: $total part(s) changed, $(( (dl_bytes + 524287) / 1048576 )) MB to download."
-  else
-    say "Downloading $tag: $total parts, $(( (dl_bytes + 536870911) / 1073741824 )) GB (an interrupted download carries on when you run this again)."
+  # An update that was stopped carries on: the parts already installed are not in "todo", so the
+  # numbering and the byte counts come from the plan written when this version was first started.
+  grand_total=$total; grand_bytes=$dl_bytes; base_n=0; base_bytes=0
+  if [ -f "$dl/plan" ] && [ "$(cut -f1 "$dl/plan")" = "$tag" ]; then
+    p_total=$(cut -f2 "$dl/plan"); p_bytes=$(cut -f3 "$dl/plan")
+    if [ "${p_total:-0}" -ge "$total" ] && [ "${p_bytes:-0}" -ge "$dl_bytes" ]; then
+      grand_total=$p_total; grand_bytes=$p_bytes; base_n=$((p_total - total)); base_bytes=$((p_bytes - dl_bytes))
+    fi
   fi
+  printf '%s\t%s\t%s\n' "$tag" "$grand_total" "$grand_bytes" > "$dl/plan"
+  if [ -d "$STATE" ] && [ "$(ls "$STATE" 2>/dev/null | wc -l)" -gt 0 ] && [ -x "$GAME/run.sh" ]; then
+    say "Updating to $tag: $grand_total part(s) changed, $(( (grand_bytes + 524287) / 1048576 )) MB to download."
+  else
+    say "Downloading $tag: $grand_total parts, $(( (grand_bytes + 536870911) / 1073741824 )) GB (an interrupted download carries on when you run this again)."
+  fi
+  [ "$base_n" -eq 0 ] || [ ! -f "$DEST/VERSION" ] || printf '%s\n' "$tag" > "$DEST/update.mixed"   # parts of two versions on disk (also an older installer's half update)
+  [ "$base_n" -eq 0 ] || say "Carrying on: $base_n part(s) are already installed, $total to go."
+  ui_open "Updating to $tag: $grand_total parts, $(fmt_bytes "$grand_bytes")"
+  ui_set 0 "Updating to $tag: part $((base_n + 1)) of $grand_total, $(fmt_bytes "$grand_bytes") in all" now
   # Keep only the parts this build still needs in the download folder.
   keep=$(awk -F'\t' '$1=="chunk" {print $4 ".tar.zst"}' "$M")
   for f in "$dl"/*.tar.zst; do
@@ -366,32 +504,71 @@ else
     printf '%s\n' "$keep" | grep -qxF "$(basename "$f")" || rm -f "$f"
   done
   i=0
+  done_bytes=$base_bytes   # bytes of the whole update that are on disk
+  fetched=0; t_start=$SECONDS   # bytes fetched by this run, for the time estimate
+  # progress_line PART_BYTES_SO_FAR WHAT: the window / notification text and the lock message.
+  progress_line() {
+    local cur=$(( done_bytes + $1 )) pct eta=""
+    pct=$(( grand_bytes > 0 ? cur * 100 / grand_bytes : 0 )); [ "$pct" -le 100 ] || pct=100
+    if [ $((SECONDS - t_start)) -ge 6 ] && [ "$fetched_now" -gt 0 ]; then
+      eta=", $(fmt_eta $(( (grand_bytes - cur) * (SECONDS - t_start) / (fetched + fetched_now) )))"
+    fi
+    ui_set "$pct" "Updating to $tag: part $part_no of $grand_total, $2 ($(fmt_bytes "$cur") of $(fmt_bytes "$grand_bytes")$eta)"
+  }
+  fetched_now=0
   for name in "${todo[@]}"; do
-    i=$((i + 1))
+    i=$((i + 1)); part_no=$((base_n + i))
+    printf 'part %s of %s\n' "$part_no" "$grand_total" > "$PROGRESS_FILE"
     IFS=$'\t' read -r _ _ asset sum size _ < <(awk -F'\t' -v n="$name" '$1=="chunk" && $2==n' "$M")
     url=$(part_url "$asset" "$sum")
     [ -n "$url" ] || die "No release has the part $asset. Please report this."
     part="$dl/$sum.tar.zst"
+    # A part file bigger than it should be is damaged: start it again.
+    [ ! -f "$part" ] || [ "$(stat -c %s "$part")" -le "$size" ] || rm -f "$part"
     if [ -f "$part" ] && [ "$(stat -c %s "$part")" = "$size" ] && [ "$(sha256sum "$part" | cut -d' ' -f1)" = "$sum" ]; then
-      say "Part $i of $total ($asset) is already downloaded."
+      say "Part $part_no of $grand_total ($asset) is already downloaded."
     else
-      say "Part $i of $total: $asset ($(( (size + 1048575) / 1048576 )) MB)"
+      say "Part $part_no of $grand_total: $asset ($(( (size + 1048575) / 1048576 )) MB)"
+      start_size=0; [ ! -f "$part" ] || start_size=$(stat -c %s "$part")
       rc=0
-      curl -fL ${dl_hdr[@]+"${dl_hdr[@]}"} --progress-bar -C - --retry 3 -o "$part" "$url" || rc=$?
-      if [ "$rc" = 33 ] || [ "$rc" = 36 ]; then
-        # The server can't resume this file: start it again from the beginning.
-        rm -f "$part"; rc=0
-        curl -fL ${dl_hdr[@]+"${dl_hdr[@]}"} --progress-bar --retry 3 -o "$part" "$url" || rc=$?
-      fi
-      [ "$rc" = 0 ] || die "The download failed. Check your internet connection and run the command again (finished parts are kept)."
+      for attempt in 1 2; do
+        if [ "$ui" = text ]; then
+          # A terminal (or an older command that pipes this script's text): curl's own bar.
+          curl -fL ${dl_hdr[@]+"${dl_hdr[@]}"} --progress-bar -C - --retry 3 -o "$part" "$url" || rc=$?
+        else
+          # No terminal (the app menu): download in the background and report as it grows.
+          curl -fsSL ${dl_hdr[@]+"${dl_hdr[@]}"} -C - --retry 3 -o "$part" "$url" &
+          cpid=$!; last_log=-1
+          while kill -0 "$cpid" 2>/dev/null; do
+            sleep 1
+            cur=$(stat -c %s "$part" 2>/dev/null || echo 0)
+            fetched_now=$(( cur - start_size )); [ "$fetched_now" -ge 0 ] || fetched_now=0
+            progress_line "$cur" "downloading"
+            tenth=$(( size > 0 ? cur * 10 / size : 0 ))
+            if [ "$tenth" -ne "$last_log" ]; then last_log=$tenth; echo "    ${tenth}0% of part $part_no"; fi
+          done
+          wait "$cpid" && rc=0 || rc=$?
+        fi
+        if [ "$rc" = 33 ] || [ "$rc" = 36 ] && [ "$attempt" = 1 ]; then
+          # The server can't resume this file: start it again from the beginning.
+          rm -f "$part"; start_size=0; rc=0
+          continue
+        fi
+        break
+      done
+      [ "$rc" = 0 ] || die "The download failed. Check your internet connection and start the game again (finished parts are kept and the update carries on)."
       if [ "$(sha256sum "$part" | cut -d' ' -f1)" != "$sum" ]; then
         rm -f "$part"
-        die "A downloaded part is damaged (checksum mismatch). Run the command again."
+        die "A downloaded part is damaged (checksum mismatch). Start the game again."
       fi
+      fetched=$(( fetched + $(stat -c %s "$part") - start_size )); fetched_now=0
     fi
+    progress_line "$size" "unpacking"
     # Install this part now (the installed record is per part, so an interrupted update
     # carries on with the parts still missing).
     mkdir -p "$GAME"
+    # From the first replaced part until VERSION is written the install holds parts of two builds.
+    [ ! -x "$GAME/run.sh" ] || printf '%s\n' "$tag" > "$DEST/update.mixed"
     awk -F'\t' -v n="$name" '($1=="chunk" || $1=="file") && $2==n' "$M" > "$dl/$name.new"
     # Files the old version of this part had and the new one doesn't.
     if [ -f "$STATE/$name.tsv" ]; then
@@ -399,9 +576,10 @@ else
         "$dl/$name.new" "$STATE/$name.tsv" | while IFS= read -r rel; do rm -f -- "$GAME/$rel"; done
     fi
     zstd -dc --long=27 "$part" | tar -C "$GAME" -xf - \
-      || die "Couldn't unpack the game. Check the free space in your home folder and run the command again."
+      || die "Couldn't unpack the game. Check the free space in your home folder and start the game again."
     mv -f "$dl/$name.new" "$STATE/$name.tsv"
     rm -f "$part"
+    done_bytes=$(( done_bytes + size ))
   done
   # Parts the new build no longer has, and any file no part owns (older installs).
   for f in "$STATE"/*.tsv; do
@@ -422,6 +600,7 @@ else
   /usr/bin/cp -f "$M" "$DEST/manifest-linux.tsv"
   rm -rf "$dl"
   printf '%s\n' "$tag" | put "$DEST/VERSION"
+  rm -f "$DEST/update.mixed"
   if [ -n "$tier" ]; then printf '%s\n' "$tier" | put "$DEST/TIER"; else rm -f "$DEST/TIER"; fi
   say "Installed $tag${tier:+ ($TIER_UP package)}."
   prepared=1
@@ -454,6 +633,8 @@ fi
 # the first launch still works.
 if [ "$prepared" = 1 ] && [ -z "${DO27_SKIP_PREPARE:-}" ]; then
   say "Preparing the game for this PC (one-time, after install/update)..."
+  echo 'preparing the game' > "$PROGRESS_FILE"
+  ui_set 100 "Update installed. Preparing the game for this PC (one-time, a few minutes)..." now
   prep_log="$DEST/prepare.log"
   : >"$prep_log"
   (cd "$GAME" && exec ./do27_launcher --prepare) >"$prep_log" 2>&1 &
@@ -472,13 +653,16 @@ if [ "$prepared" = 1 ] && [ -z "${DO27_SKIP_PREPARE:-}" ]; then
         # The steps differ in length: a rough estimate, rounded up to 5 s.
         left=$(( ((secs * (prep_total - prep_done) / prep_done) + 4) / 5 * 5 ))
         echo "    step $prep_done of $prep_total done, $secs s so far, about $left s left"
+        ui_set 100 "Preparing the game for this PC: step $prep_done of $prep_total done, about $left s left" now
       else
         echo "    step $prep_done of $prep_total done, $secs s so far"
+        ui_set 100 "Preparing the game for this PC: step $prep_done of $prep_total done" now
       fi
     elif [ $((SECONDS - prep_beat)) -ge 20 ]; then
       # Never a silent wait: a heartbeat when no step finished for 20 s.
       prep_beat=$SECONDS
       echo "    still working: $secs s so far, step $(( ${prep_shown/#-1/0} + 1 )) of ${prep_total/#0/6} is running"
+      ui_set 100 "Preparing the game for this PC: step $(( ${prep_shown/#-1/0} + 1 )) of ${prep_total/#0/6} is running ($secs s so far)" now
     fi
   done
   wait "$prep_pid" || warn "prepare finished with a warning (the first launch still works)."
@@ -488,25 +672,81 @@ if [ "$prepared" = 1 ] && [ -z "${DO27_SKIP_PREPARE:-}" ]; then
 fi
 
 # 6. A command and an app-menu entry.
-put "$BIN/do27" 755 <<EOF
+# The command is a template (quoted, so nothing in it needs escaping) with the install's
+# places filled in. It holds the update lock, runs the update (its progress shows in a window
+# or notifications when there is no terminal) and then ALWAYS starts the game: the new build,
+# or the one already installed when the update failed.
+wrapper=$(cat <<'WRAP'
 #!/usr/bin/env bash
-# Direct Order 27 alpha (written by the installer). Each start checks for a newer
-# alpha build and installs it first (a few seconds; skipped when offline).
-latest=\$(curl -fsS --max-time 4 \${DO27_GH_TOKEN:+-H "Authorization: Bearer \$DO27_GH_TOKEN"} "$API" 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"\$/\1/' || true)
-have=\$(cat "$DEST/VERSION" 2>/dev/null)
+# Direct Order 27 alpha (written by the installer, wrapper 2). Each start checks for a newer
+# alpha build and installs it first, then starts the game.
+DEST="__DEST__"
+API="__API__"
+RAW="__RAW__"
+MIRROR="__MIRROR__"
+REPO_OVERRIDE="__REPO__"
+mkdir -p "$DEST"
+say() {
+  echo "Direct Order 27: $*"
+  if ! { : </dev/tty; } 2>/dev/null; then
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null; then
+      zenity --info --no-wrap --timeout=10 --title="Direct Order 27" --text="$*" >/dev/null 2>&1 9>&- &
+    elif command -v notify-send >/dev/null; then
+      notify-send -a "Direct Order 27" -h string:x-canonical-private-synchronous:do27-update "Direct Order 27" "$*" 2>/dev/null || true
+    fi
+  fi
+}
+# One update at a time: the lock is held (this file descriptor) until the game starts.
+if command -v flock >/dev/null; then
+  exec 9>"$DEST/update.lock"
+  if ! flock -n 9; then
+    prog=$(cat "$DEST/update.progress" 2>/dev/null || true)
+    say "Already updating${prog:+ ($prog)}. The game starts when the update is done."
+    exit 0
+  fi
+fi
+tok=(); [ -z "${DO27_GH_TOKEN:-}" ] || tok=(-H "Authorization: Bearer $DO27_GH_TOKEN")
+latest=$(curl -fsS --max-time 4 "${tok[@]}" "$API" 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/' || true)
+have=$(cat "$DEST/VERSION" 2>/dev/null || true)
 # Numeric per field (v0.0.9 < v0.0.10 < v0.1.0); the same version under another tag is a re-publish.
-vnum() { printf '%s' "\$1" | sed -E 's/^v//; s/[-+].*\$//'; }
+vnum() { printf '%s' "$1" | sed -E 's/^v//; s/[-+].*$//'; }
 newer=0
-if [ -n "\$latest" ] && [ "\$latest" != "\$have" ]; then
-  if [ "\$(vnum "\$latest")" = "\$(vnum "\$have")" ] || [ "\$(printf '%s\\n%s\\n' "\$(vnum "\$latest")" "\$(vnum "\$have")" | sort -V | tail -1)" = "\$(vnum "\$latest")" ]; then newer=1; fi
+if [ -n "$latest" ] && [ "$latest" != "$have" ]; then
+  if [ "$(vnum "$latest")" = "$(vnum "$have")" ] || [ "$(printf '%s\n%s\n' "$(vnum "$latest")" "$(vnum "$have")" | sort -V | tail -1)" = "$(vnum "$latest")" ]; then newer=1; fi
 fi
-if [ "\$newer" = 1 ]; then
-  command -v notify-send >/dev/null && notify-send "Direct Order 27" "Updating to \$latest..." 2>/dev/null || true
-  echo "Direct Order 27: updating to \$latest..."
-  curl -fsSL \${DO27_GH_TOKEN:+-H "Authorization: Bearer \$DO27_GH_TOKEN"} "$RAW/install.sh" | DO27_AUTOUPDATE=1 ${MIRROR:+DO27_ALPHA_MIRROR="$MIRROR"} ${REPO_OVERRIDE:+DO27_REPO_OVERRIDE="$REPO"} bash 2>&1 | tee -a "$DEST/update.log" || true
+if [ "$newer" = 1 ]; then
+  # (A quick notification only: the update's own progress window opens a moment later.)
+  echo "Direct Order 27: updating to $latest... (the game starts by itself when this is done)"
+  { : </dev/tty; } 2>/dev/null || { command -v notify-send >/dev/null && notify-send -a "Direct Order 27" -h string:x-canonical-private-synchronous:do27-update "Direct Order 27" "Updating to $latest..." 2>/dev/null; } || true
+  tmp=$(mktemp "$DEST/.install.XXXXXX")
+  if curl -fsSL "${tok[@]}" -o "$tmp" "$RAW/install.sh"; then
+    rc=0
+    env DO27_AUTOUPDATE=1 DO27_WRAPPER=2 DO27_LOCK_HELD=1 ${MIRROR:+DO27_ALPHA_MIRROR="$MIRROR"} ${REPO_OVERRIDE:+DO27_REPO_OVERRIDE="$REPO_OVERRIDE"} \
+      bash "$tmp" </dev/null 2>&1 | tee -a "$DEST/update.log"
+    rc=${PIPESTATUS[0]}
+    [ "$rc" = 0 ] || echo "Direct Order 27: the update did not finish (code $rc); details are in $DEST/update.log"
+  else
+    say "Couldn't download the updater (offline?). Starting the version you have."
+  fi
+  rm -f "$tmp"
 fi
-cd "$DEST/game" && exec ./run.sh "\$@"
-EOF
+if [ -f "$DEST/update.mixed" ]; then
+  # A half-applied update: parts of two builds. Not safe to start; the next start carries on.
+  say "The update to $(head -1 "$DEST/update.mixed") did not finish. Start Direct Order 27 again to continue it (it picks up where it stopped)."
+  exit 1
+fi
+if [ -x "$DEST/game/run.sh" ]; then
+  # The game must not inherit the update lock (fd 9).
+  cd "$DEST/game" && exec ./run.sh "$@" 9>&-
+fi
+say "Direct Order 27 isn't installed. Run the install command again."
+exit 1
+WRAP
+)
+shopt -u patsub_replacement 2>/dev/null || true
+wrapper=${wrapper//__DEST__/$DEST}; wrapper=${wrapper//__API__/$API}; wrapper=${wrapper//__RAW__/$RAW}
+wrapper=${wrapper//__MIRROR__/$MIRROR}; wrapper=${wrapper//__REPO__/${REPO_OVERRIDE:+$REPO}}
+printf '%s\n' "$wrapper" | put "$BIN/do27" 755
 icon="$DEST/game/icon.png"; [ -f "$icon" ] || icon=applications-games
 put "$APPS/do27-alpha.desktop" <<EOF
 [Desktop Entry]
@@ -546,7 +786,14 @@ if [ -x "$DEST/game/run.sh" ] && [ -z "${DO27_AUTOUPDATE:-}" ]; then
 fi
 
 # An auto-update (the do27 command) goes straight on to start the game.
-[ -z "${DO27_AUTOUPDATE:-}" ] || exit 0
+if [ -n "$AUTO" ]; then
+  if [ "$prepared" = 1 ]; then
+    say "Update done, starting Direct Order 27."
+    ui_set 100 "Update done, starting Direct Order 27" now
+    sleep 2
+  fi
+  exit 0
+fi
 printf '\n%sDone:%s open %sDirect Order 27 (alpha)%s from your app menu, or type %sdo27%s in a terminal.\n' "$B$G" "$N" "$B" "$N" "$B" "$N"
 case ":$PATH:" in
   *":$BIN:"*) ;;

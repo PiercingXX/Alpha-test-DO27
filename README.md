@@ -42,11 +42,13 @@
 
 ---
 
-## Alpha test: Direct Order 27 v0.1 alpha (v0.1.0)
+## Alpha test: Direct Order 27 v0.1.3 alpha
 
 Thanks for testing! This is where you download and install the Direct Order 27 alpha. It runs on Linux (Arch, CachyOS, Ubuntu 22.04 or 24.04, or Debian 12 or 13) and on Windows 10 or 11.
 
-What changed in this build, and what is known to be broken, is in the notes of the latest release: **Releases > Latest**.
+New in v0.1.3: pick your faction, ship, loadout and kit in the lobby and ready up; Combat Exercises on the main menu (Exercise 0, Controls, and Exercise 1, Boots and Hulls; Exercises 2 to 10 come in v0.2.0); HUD scale from 75% to 150%; and much faster loading on a PC with about 24 GB of free memory. Everyone in a match must run v0.1.3: v0.1.2 can't join.
+
+Everything that changed in this build, and what is known to be broken, is in the notes of the latest release: **Releases > Latest**.
 
 ## Linux (Arch, CachyOS, Ubuntu, Debian): install in 3 steps
 
@@ -62,7 +64,7 @@ What changed in this build, and what is known to be broken, is in the notes of t
    wget -qO- https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash
    ```
 
-2. Wait. It checks your system, picks the package that fits your graphics card (see **Packages** below), installs anything missing (it may ask for your password once), downloads the game (16 to 31 GB depending on the package, in parts; an interrupted download carries on when you run the line again) and checks every part. The first start builds shader caches and shows its progress; that can take several minutes.
+2. Wait. It checks your system, picks the package that fits your graphics card (see **Packages** below), installs anything missing (it may ask for your password once), downloads the game (13 to 27 GB depending on the package, in parts; an interrupted download carries on when you run the line again) and checks every part. The first start builds shader caches and shows its progress; that can take several minutes.
 
 3. Play: open **Direct Order 27 (alpha)** from your app menu, or type `do27` in a terminal. The first time, the game asks you to choose your alpha username.
 
@@ -76,7 +78,7 @@ The game updates itself: each time you start it, it checks for a new alpha build
    irm https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.ps1 | iex
    ```
 
-2. Wait. It checks your PC (Windows version, graphics card, free space), downloads the game in parts (16 to 31 GB depending on the package; if the download stops, run the same line again and it carries on) and checks the download. It doesn't need administrator rights.
+2. Wait. It checks your PC (Windows version, graphics card, free space), downloads the game in parts (13 to 27 GB depending on the package; if the download stops, run the same line again and it carries on) and checks the download. It doesn't need administrator rights.
 
 3. Play: open **Direct Order 27 (alpha)** from the Start menu or the shortcut on your desktop, or type `do27` in a new PowerShell window. The first time, the game asks you to choose your alpha username.
 
@@ -96,9 +98,11 @@ The installer reads your graphics card's video memory and picks one package. The
 
 | Package | Chosen when | Download | Installed |
 | --- | --- | --- | --- |
-| LOW | under 10 GB of video memory, or under 12 GB of RAM | about 16 GB | about 21 GB |
-| HIGH | 10 GB of video memory or more | about 23 GB | about 28 GB |
-| ULTRA | 20 GB of video memory or more | about 31 GB | about 36 GB |
+| LOW | under 10 GB of video memory, graphics built into the CPU, or under 12 GB of RAM | about 13 GB | about 17 GB |
+| HIGH | 10 GB of video memory or more | about 19 GB | about 24 GB |
+| ULTRA | 20 GB of video memory or more | about 27 GB | about 31 GB |
+
+On a weak PC (graphics built into the CPU, or a small older card), use the **ULTRA LOW** graphics setting in the game: **Settings > VIDEO**. A weak PC that was on Low is moved to ULTRA LOW once, the first time v0.1.3 starts; after that, your choice stays.
 
 An update keeps the package you have. To choose one yourself, set `DO27_TIER` to `low`, `high` or `ultra` before the install line, for example on Linux: `DO27_TIER=low curl -fsSL https://raw.githubusercontent.com/PiercingXX/Alpha-test-DO27/main/install.sh | bash`. On Windows: `$env:DO27_TIER='low'` in the same PowerShell window first.
 
@@ -180,9 +184,11 @@ If the game says the router could not be mapped, also forward **UDP 7790** to yo
 
 Every key lives in one file you can edit, `~/.config/DO27/key.map` on Linux or `%APPDATA%\DO27\key.map` on Windows. Each line names its action and says where the default came from. The same bindings are in the game under **Settings > Input**, which writes the same file. The default is built for a Colemak keyboard and has a QWERTY version with the keys in the same places; pick yours on the first start. Menus also take `h` `j` `k` `l`.
 
+New to the game? Open **Combat Exercises** on the main menu. Exercise 0, Controls, shows every key and lets you try it; Exercise 1, Boots and Hulls, walks you through moving on foot, boarding a hull, driving and hopping out.
+
 ## Reporting problems
 
-Crash and session logs are sent to the dev team automatically, so a crash gets reported even if you do nothing: during play, when you quit, and on the next start after a crash. To tell us what happened, open an issue here (**Issues > New issue > Bug report**) or post in the alpha channel on Discord. Include your alpha username and the time it happened.
+Crash and session logs are sent to the dev team automatically, so a crash gets reported even if you do nothing: during play, when you quit, and on the next start after a crash. To flag something the moment it happens, press the bug-report key in game (**Shift+F9** unless you changed it): it sends a note with the last frame and the log. To tell us more, open an issue here (**Issues > New issue > Bug report**) or post in the alpha channel on Discord. Include your alpha username and the time it happened.
 
 If we ask for your logs, they are in `~/.local/share/do27/logs/` on Linux and under `%LOCALAPPDATA%\DO27\` on Windows. Zip the newest session folder and send it in the issue or on Discord.
 
